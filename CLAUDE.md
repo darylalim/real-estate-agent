@@ -39,8 +39,10 @@ than in `pyproject.toml` — `uvx` runs each in its own ephemeral environment, s
 "clean" can flip between two runs on identical source. Bump a pin deliberately, don't drop it. `pytest` is the
 only dev dependency, and `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
 
-**`ruff check` yes, `ruff format` no.** The formatter would rewrite 7 of the 19 Python files — line-wrapping
-disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. The rule set in
+**`ruff check` yes, `ruff format` no.** The formatter would rewrite 7 of the 14 Python files — line-wrapping
+disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
+reports a total of 19, not 14: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
+this file, and the three `SKILL.md` files are in its denominator. All 7 rewrites are `.py`.) The rule set in
 `pyproject.toml` uses `select`, not `extend-select`, because ruff's own defaults have widened across releases
 and inheriting them reintroduces exactly the drift the version pins remove. The comment there records which
 rule families were measured against this codebase and rejected: `PLC0415` and `PLR0913` in particular would

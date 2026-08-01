@@ -41,6 +41,15 @@ pythonpath = ["."]
 # all of the above.
 select = ["E4", "E7", "E9", "F", "I", "UP", "PLR0402"]
 
+[tool.ty.terminal]
+# Warnings fail the check. Adopted while the codebase was at zero of them, which
+# is the only cheap moment to do it -- later it means clearing a backlog first.
+# Note what is deliberately absent: no [tool.ty.environment] python-version. ty
+# infers 3.11 from requires-python, which is the floor the code must support,
+# not the 3.14 in .python-version that merely runs it. Pinning the environment
+# to 3.14 would stop ty catching syntax that breaks the users we claim to serve.
+error-on-warning = true
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
