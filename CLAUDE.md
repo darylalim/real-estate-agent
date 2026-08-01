@@ -101,7 +101,7 @@ which makes the next `--lf` collect only it. That is a red `--lf` no code change
 
 ## The hooks in `.claude/`
 
-Four hooks, checked in, active only inside Claude Code. They are **local convenience, not a gate anyone else
+Five hooks, checked in, active only inside Claude Code. They are **local convenience, not a gate anyone else
 inherits** — a clone without Claude Code gets none of them, which is why the enforcement that matters lives in
 `pyproject.toml`, `scripts/check.sh`, and `tests/`.
 
@@ -110,9 +110,10 @@ inherits** — a clone without Claude Code gets none of them, which is why the e
 | `session-start.sh` | SessionStart | Records the starting commit, so the Stop gate can see work committed mid-turn |
 | `static-gate.sh` | PostToolUse(Edit\|Write) | ruff + ty on `.py` edits, 0.12s |
 | `protect-files.sh` | PreToolUse | Denies `.env` and `uv.lock` via Edit/Write/NotebookEdit, and `.env` reads via Bash |
+| `confirm-live-run.sh` | PreToolUse(Bash) | Asks before `main.py`, the only command here that spends money |
 | `done-gate.sh` | Stop | `scripts/check.sh` always; the 3.11 floor leg when Python changed |
 
-Three things about them worth knowing before editing:
+Four things about them worth knowing before editing:
 
 - **`done-gate.sh` runs `check.sh` unconditionally.** It used to gate on a changed `*.py`, which skipped the
   suite on exactly the edits the toolchain tests exist to catch — a `pyproject.toml` that drops
@@ -123,6 +124,11 @@ Three things about them worth knowing before editing:
   the accidental `cat .env`, not for an adversary. An earlier version of this hook layer also tried to police
   `ruff format` and the ty pin by matching shell strings; that was deleted rather than patched, because
   `cat x && uvx ruff format .` walked straight through it and the guard read as protection it did not provide.
+- **`confirm-live-run.sh` is leaky too, and that is fine, because it asks rather than denies.** The distinction
+  is the whole reason it survived the deletion above: a missed case costs one unprompted run, not a false
+  belief that something is blocked. It normalises quotes and whitespace first — `uv run main.py`,
+  `uv run python -m main`, and `python "main.py"` were all bypasses in the first version. `M=main.py;
+  uv run python $M` still gets through, and no regex over a shell string will fix that.
 
 ## Architecture
 
