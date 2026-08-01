@@ -17,6 +17,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/real_estate_agent"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# main.py lives at the repo root; without this the CLI's approval-gate helpers
+# are not importable and would go untested.
+pythonpath = ["."]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

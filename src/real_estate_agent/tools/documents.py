@@ -18,6 +18,9 @@ from real_estate_agent.config import DOCUMENTS_DIR
 _TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv"}
 _PDF_SUFFIXES = {".pdf"}
 
+# Roughly 60k tokens of text; past this a document belongs in chunks.
+_MAX_TEXT_BYTES = 240_000
+
 
 def _resolve_within_documents(filename: str) -> Path:
     """Resolve ``filename`` under DOCUMENTS_DIR, or raise if it escapes."""
@@ -86,9 +89,26 @@ def make_document_tools() -> list[BaseTool]:
         suffix = path.suffix.lower()
 
         if suffix in _TEXT_SUFFIXES:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            # Capped like the PDF branch. An uncapped read drops an entire
+            # multi-megabyte export into the reviewer's context as one message.
+            raw = path.read_bytes()
+            truncated = len(raw) > _MAX_TEXT_BYTES
+            text = raw[:_MAX_TEXT_BYTES].decode("utf-8", errors="replace")
             return json.dumps(
-                {"filename": filename, "format": "text", "characters": len(text), "text": text},
+                {
+                    "filename": filename,
+                    "format": "text",
+                    "characters": len(text),
+                    "total_bytes": len(raw),
+                    "truncated": truncated,
+                    "truncation_note": (
+                        f"Only the first {_MAX_TEXT_BYTES} bytes are shown. Say so in "
+                        "your findings rather than treating this as the whole document."
+                        if truncated
+                        else None
+                    ),
+                    "text": text,
+                },
                 indent=2,
             )
 

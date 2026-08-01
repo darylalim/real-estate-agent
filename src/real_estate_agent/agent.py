@@ -60,6 +60,23 @@ professional.
 """
 
 
+# FilesystemBackend grants real disk access, so containment is explicit.
+# Rules are evaluated in order and the FIRST MATCH WINS (unmatched defaults to
+# allow), which is why the allows must precede the catch-all write deny.
+# Exported so the test suite asserts against these exact rules rather than a
+# hand-copied duplicate that cannot fail when this list changes.
+WORKSPACE_PERMISSIONS: list[FilesystemPermission] = [
+    FilesystemPermission(operations=["read", "write"], paths=["/workspace/**"], mode="allow"),
+    FilesystemPermission(operations=["read"], paths=["/skills/**"], mode="allow"),
+    FilesystemPermission(
+        operations=["read", "write"],
+        paths=["/.env", "/.env.*", "/.venv/**", "/.git/**"],
+        mode="deny",
+    ),
+    FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
+]
+
+
 def build_agent(
     *,
     provider: ListingsProvider | None = None,
@@ -103,20 +120,6 @@ def build_agent(
         model=subagent_model,
     )
 
-    # FilesystemBackend grants real disk access, so containment is explicit.
-    # Rules are evaluated in order and the first match wins, which is why the
-    # allows come before the catch-all write deny.
-    permissions = [
-        FilesystemPermission(operations=["read", "write"], paths=["/workspace/**"], mode="allow"),
-        FilesystemPermission(operations=["read"], paths=["/skills/**"], mode="allow"),
-        FilesystemPermission(
-            operations=["read", "write"],
-            paths=["/.env", "/.env.*", "/.venv/**", "/.git/**"],
-            mode="deny",
-        ),
-        FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
-    ]
-
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = (
         {"save_draft": True} if require_approval else None
     )
@@ -133,7 +136,7 @@ def build_agent(
         middleware=[TodoListMiddleware()],
         subagents=subagents,
         backend=FilesystemBackend(root_dir=PROJECT_ROOT, virtual_mode=True),
-        permissions=permissions,
+        permissions=WORKSPACE_PERMISSIONS,
         interrupt_on=interrupt_on,
         checkpointer=checkpointer,
         name="real-estate-agent",

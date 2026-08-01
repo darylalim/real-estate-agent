@@ -125,6 +125,7 @@ Run live against `anthropic:claude-opus-5`, traces in LangSmith:
 | Planning and cross-specialist handoff | 3× `write_todos`, 2 delegations, liaison read the analyst's CMA file |
 | Write containment | `permission denied` on `/src/notes.md`; nothing written outside `workspace/` |
 | Fair-housing guardrail | Refused "family-friendly", "young professionals", "safe neighborhood", "good schools" with the legal basis for each, and supplied compliant copy |
+| Approval gate, both directions | Approve writes the draft; reject blocks it; exhausted/absent input **fails closed** rather than crashing or approving |
 
 Three defects the run exposed, since fixed:
 
@@ -138,6 +139,31 @@ Three defects the run exposed, since fixed:
   genuine outliers remain so the insufficient-comps path stays reachable.
 - client-liaison had two ways to write a draft and used both, producing
   divergent copies. `save_draft` is now the only sanctioned path.
+
+A later code review found more, since fixed and regression-tested:
+
+- **`--require-approval` was unusable.** The resume payload was a bare list,
+  but the middleware reads `interrupt(request)["decisions"]` — so answering the
+  prompt raised `TypeError` on both approve and reject. It also built one
+  decision regardless of how many tool calls were pending, which the middleware
+  rejects outright.
+- **`market_statistics` divided by `months_back` without filtering by it**, so
+  the same 16 sales yielded months-of-inventory of 5.2 or 21.0 — flipping the
+  reading from balanced to extreme buyer's market. The window is now applied to
+  the sales themselves, via a `sold_within_months` provider filter.
+- **`qualify_lead` blamed the budget for a bedroom shortfall**, reporting a $2M
+  budget in a $683k market as clearing "only 8% of inventory". Budget share is
+  now measured against listings that already meet the non-price requirements.
+- **`status="Active"` returned zero listings** — string filters were
+  case-sensitive, which reads to the agent as an empty market. Now
+  case-insensitive, and the tool exposes proper enums.
+- **A newline in an email subject** raised after the `.md` was already written,
+  leaving an orphan pointing at a `.eml` that never existed. Headers are
+  flattened first and the message is built before anything is written.
+- Plus: same-second drafts no longer clobber each other, text extraction is
+  size-capped like the PDF branch, `lot_sqft` can't go negative, the dataset has
+  one `_TODAY`, and `require_api_key` derives the needed key from the model's
+  provider prefix instead of always demanding an Anthropic one.
 
 ## Notes on deepagents 0.7.1
 

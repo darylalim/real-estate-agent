@@ -12,6 +12,7 @@ import json
 import re
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from langchain.tools import tool
@@ -21,9 +22,27 @@ from real_estate_agent.config import DRAFTS_DIR
 from real_estate_agent.providers.base import ListingsProvider
 
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+_WHITESPACE_RUN = re.compile(r"\s+")
 
 # Outlook truncates mailto: around 2 KB; stay clear of the edge.
 _MAILTO_MAX_CHARS = 1800
+
+
+def _collapse_whitespace(value: str) -> str:
+    """Flatten a value destined for an email header to a single line."""
+    return _WHITESPACE_RUN.sub(" ", value or "").strip()
+
+
+def _unique_pair(base: str) -> tuple[Path, Path]:
+    """Return (.md, .eml) paths where neither file already exists."""
+    candidate = base
+    suffix = 1
+    while (DRAFTS_DIR / f"{candidate}.md").exists() or (
+        DRAFTS_DIR / f"{candidate}.eml"
+    ).exists():
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+    return DRAFTS_DIR / f"{candidate}.md", DRAFTS_DIR / f"{candidate}.eml"
 
 
 def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
@@ -55,11 +74,24 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
             min_beds: Minimum bedrooms they require, if stated.
             state: Two-letter state code, if known.
         """
+        # Three counts, because "budget clears X% of inventory" is only a
+        # statement about budget if the denominator already satisfies every
+        # other requirement. Dividing by total inventory blames the budget for
+        # a bedroom shortfall.
         matches = list(
             provider.search(
                 city=target_city,
                 state=state,
                 max_price=budget_max,
+                min_beds=min_beds,
+                status="active",
+                limit=500,
+            )
+        )
+        meets_requirements = list(
+            provider.search(
+                city=target_city,
+                state=state,
                 min_beds=min_beds,
                 status="active",
                 limit=500,
@@ -88,18 +120,38 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
             score += 8
             signals.append(f"Long timeline ({timeline_months} months) — nurture, don't push.")
 
-        share = (len(matches) / len(total_active)) if total_active else 0.0
-        if share >= 0.35:
+        # Budget feasibility measured only against homes that already meet the
+        # non-price requirements.
+        share = (len(matches) / len(meets_requirements)) if meets_requirements else 0.0
+        if not meets_requirements:
+            signals.append(
+                "No active listing meets the stated requirements at any price — the "
+                "requirements, not the budget, are the binding constraint."
+            )
+        elif share >= 0.35:
             score += 20
-            signals.append("Budget clears a healthy share of active inventory.")
+            signals.append(
+                f"Budget clears {share:.0%} of listings that meet their requirements."
+            )
         elif share > 0:
             score += 10
             signals.append(
-                f"Budget clears only {share:.0%} of active inventory — expect a narrow search."
+                f"Budget clears only {share:.0%} of listings that meet their "
+                "requirements — expect a narrow search."
             )
         else:
             signals.append(
-                "Budget clears no current active inventory — reset expectations or widen the area."
+                "Budget clears none of the listings that meet their requirements — "
+                "reset expectations or widen the area."
+            )
+
+        # Called out separately so a requirement-driven shortage is never
+        # reported as a budget problem.
+        if total_active and len(meets_requirements) / len(total_active) < 0.25:
+            signals.append(
+                f"Only {len(meets_requirements)} of {len(total_active)} active listings "
+                "meet the non-price requirements — the requirements are narrowing the "
+                "search more than the budget is."
             )
 
         tier = "hot" if score >= 75 else "warm" if score >= 45 else "cool"
@@ -118,8 +170,13 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
                 "qualification": {"score": score, "tier": tier, "signals": signals},
                 "market_feasibility": {
                     "active_listings_in_city": len(total_active),
-                    "listings_within_budget": len(matches),
-                    "share_of_inventory_affordable": round(share, 3),
+                    "listings_meeting_requirements": len(meets_requirements),
+                    "listings_within_budget_and_requirements": len(matches),
+                    "share_of_qualifying_inventory_affordable": round(share, 3),
+                    "denominator": (
+                        "listings_meeting_requirements — so this share reflects "
+                        "budget alone, not the bedroom or location filters"
+                    ),
                     "sample_matches": [listing.as_dict() for listing in matches[:5]],
                 },
             },
@@ -154,17 +211,40 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
                 reviewer will fill it in.
         """
         DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Header values may not contain CR/LF — Python's email policy raises,
+        # and a raw newline here is the classic header-injection vector. Model
+        # output routinely carries a stray newline in a subject line.
+        subject = _collapse_whitespace(subject)
+        to = _collapse_whitespace(to)
+
         stem = _SAFE_FILENAME.sub("-", filename).strip("-.") or "draft"
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-        md_path = DRAFTS_DIR / f"{stem}-{stamp}.md"
-        eml_path = DRAFTS_DIR / f"{stem}-{stamp}.eml"
+        # Second-resolution stamps collide when a draft is revised in the same
+        # turn. Silently overwriting the earlier copy is the exact failure this
+        # tool exists to prevent, so find a free name instead.
+        md_path, eml_path = _unique_pair(f"{stem}-{stamp}")
 
         # mailto: is the genuine one-click path, but clients cap URL length
         # (Outlook truncates around 2 KB). Offer it only when it will survive.
         query = urlencode({"subject": subject, "body": body}, quote_via=quote)
         mailto = f"mailto:{quote(to)}?{query}"
         mailto_usable = len(mailto) <= _MAILTO_MAX_CHARS
+
+        # Build the message first. If a header is rejected we must not have
+        # already written a .md pointing at a .eml that never gets created.
+        #
+        # X-Unsent: 1 is the convention that makes a mail client open this as a
+        # composable draft rather than a received message. No From and no Date:
+        # the client fills those, and their absence keeps it clearly unsent.
+        message = EmailMessage()
+        if to:
+            message["To"] = to
+        message["Subject"] = subject
+        message["X-Unsent"] = "1"
+        message.set_content(body)
+        rendered = message.as_bytes()
 
         md_path.write_text(
             f"# {subject}\n\n"
@@ -175,17 +255,7 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
             f"---\n\n{body}\n",
             encoding="utf-8",
         )
-
-        # X-Unsent: 1 is the convention that makes a mail client open this as a
-        # composable draft rather than a received message. No From and no Date:
-        # the client fills those, and their absence keeps it clearly unsent.
-        message = EmailMessage()
-        if to:
-            message["To"] = to
-        message["Subject"] = subject
-        message["X-Unsent"] = "1"
-        message.set_content(body)
-        eml_path.write_bytes(message.as_bytes())
+        eml_path.write_bytes(rendered)
 
         return json.dumps(
             {

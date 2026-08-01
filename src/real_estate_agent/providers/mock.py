@@ -16,6 +16,11 @@ from real_estate_agent.providers.base import Listing
 
 _SEED = 1337
 
+# The dataset's "now". Single source of truth: generation and every recency
+# filter read this, so they cannot drift apart and silently disable the
+# close-date screen.
+_TODAY = date(2026, 7, 31)
+
 _MARKETS = [
     # (city, state, zip, center lat/lon, base $/sqft)
     ("Austin", "TX", "78704", 30.2500, -97.7594, 545),
@@ -33,7 +38,7 @@ _PROPERTY_TYPES = ["single_family", "condo", "townhouse"]
 
 def _build_dataset() -> list[Listing]:
     rng = random.Random(_SEED)
-    today = date(2026, 7, 31)
+    today = _TODAY
     listings: list[Listing] = []
     counter = 1000
 
@@ -90,7 +95,12 @@ def _build_dataset() -> list[Listing]:
                     beds=beds,
                     baths=baths,
                     sqft=sqft,
-                    lot_sqft=int(rng.gauss(7000, 2600)) if property_type != "condo" else 0,
+                    # Clamped like sqft above: an unclamped Gaussian goes
+                    # negative below -2.7 sigma, and a negative lot size flows
+                    # straight into the CMA's lot-size adjustment row.
+                    lot_sqft=max(1200, int(rng.gauss(7000, 2600)))
+                    if property_type != "condo"
+                    else 0,
                     year_built=year_built,
                     property_type=property_type,
                     status=status,
@@ -130,7 +140,7 @@ class MockListingsProvider:
     def __init__(self) -> None:
         self._listings = _build_dataset()
         self._by_id = {listing.listing_id: listing for listing in self._listings}
-        self._today = date(2026, 7, 31)
+        self._today = _TODAY
 
     def search(
         self,
@@ -143,19 +153,39 @@ class MockListingsProvider:
         min_baths: float | None = None,
         property_type: str | None = None,
         status: str | None = "active",
+        sold_within_months: int | None = None,
         limit: int = 25,
     ) -> Sequence[Listing]:
+        sold_cutoff = (
+            self._today - timedelta(days=int(sold_within_months * 30.44))
+            if sold_within_months is not None
+            else None
+        )
+
+        def closed_recently(listing: Listing) -> bool:
+            if sold_cutoff is None:
+                return True
+            if listing.sold_date is None:
+                return False
+            return date.fromisoformat(listing.sold_date) >= sold_cutoff
+
         results = [
             listing
             for listing in self._listings
-            if (status is None or listing.status == status)
+            # Case-insensitive on every string filter. A capitalised "Active"
+            # returning zero listings reads to the agent as an empty market.
+            if (status is None or listing.status.lower() == status.lower())
             and (city is None or listing.city.lower() == city.lower())
             and (state is None or listing.state.lower() == state.lower())
             and (min_price is None or listing.price >= min_price)
             and (max_price is None or listing.price <= max_price)
             and (min_beds is None or listing.beds >= min_beds)
             and (min_baths is None or listing.baths >= min_baths)
-            and (property_type is None or listing.property_type == property_type)
+            and (
+                property_type is None
+                or listing.property_type.lower() == property_type.lower()
+            )
+            and closed_recently(listing)
         ]
         # Freshest inventory first — mirrors how most MLS feeds default.
         results.sort(key=lambda listing: (listing.days_on_market, listing.price))
@@ -202,17 +232,20 @@ class MockListingsProvider:
             return None, [], {}
 
         cutoff = self._today - timedelta(days=int(months_back * 30.44))
-        rejected = {"not_sold_or_stale": 0, "outside_radius": 0, "size_mismatch": 0}
+        # `not_sold` is a near-constant floor (every active and pending
+        # listing), so it is kept separate from `stale`. Lumped together it
+        # swamps the recency signal the analyst actually needs.
+        rejected = {"not_sold": 0, "stale": 0, "outside_radius": 0, "size_mismatch": 0}
         scored: list[tuple[float, Listing]] = []
 
         for candidate in self._listings:
             if candidate.listing_id == subject.listing_id:
                 continue
             if candidate.status != "sold" or candidate.sold_date is None:
-                rejected["not_sold_or_stale"] += 1
+                rejected["not_sold"] += 1
                 continue
             if date.fromisoformat(candidate.sold_date) < cutoff:
-                rejected["not_sold_or_stale"] += 1
+                rejected["stale"] += 1
                 continue
 
             distance = _miles_between(

@@ -8,6 +8,8 @@ loudly at construction.
 
 from __future__ import annotations
 
+import email
+import email.policy
 import json
 from pathlib import Path
 from typing import Literal, cast
@@ -18,6 +20,7 @@ from deepagents import FilesystemPermission
 from deepagents.middleware.filesystem import _check_fs_permission
 
 from real_estate_agent.providers import MockListingsProvider
+from real_estate_agent.tools.comms import make_comms_tools
 from real_estate_agent.tools.documents import make_document_tools
 from real_estate_agent.tools.market import make_market_tools
 
@@ -130,7 +133,7 @@ def test_comparables_report_what_was_screened_out(provider: MockListingsProvider
         subject.listing_id, limit=1000
     )
 
-    assert set(rejected) == {"not_sold_or_stale", "outside_radius", "size_mismatch"}
+    assert set(rejected) == {"not_sold", "stale", "outside_radius", "size_mismatch"}
     assert sum(rejected.values()) > 0
 
     # Every other listing is either returned or lands in exactly one bucket.
@@ -146,7 +149,8 @@ def test_find_comparables_surfaces_screening(provider: MockListingsProvider) -> 
         tools["find_comparables"].invoke({"listing_id": subject.listing_id})
     )
     assert set(payload["screened_out"]) == {
-        "not_sold_or_stale",
+        "not_sold",
+        "stale",
         "outside_radius",
         "size_mismatch",
     }
@@ -200,7 +204,125 @@ def test_document_extraction_reads_a_real_file(tmp_path, monkeypatch) -> None:
     assert "2,400" in payload["text"]
 
 
+def test_search_is_case_insensitive(provider: MockListingsProvider) -> None:
+    """Regression: "Active" returned zero, which reads as an empty market."""
+    assert len(provider.search(city="Austin", status="Active")) == len(
+        provider.search(city="Austin", status="active")
+    )
+    assert len(provider.search(city="AUSTIN", property_type="Condo")) == len(
+        provider.search(city="austin", property_type="condo")
+    )
+
+
+def test_market_statistics_window_filters_the_numerator(
+    provider: MockListingsProvider,
+) -> None:
+    """Regression: months_back divided but never filtered, so the same 16 sales
+    produced months-of-inventory of 5.2 or 21.0 purely by changing the window."""
+    tools = {tool.name: tool for tool in make_market_tools(provider)}
+    short = json.loads(
+        tools["market_statistics"].invoke({"city": "Austin", "months_back": 3})
+    )
+    long = json.loads(
+        tools["market_statistics"].invoke({"city": "Austin", "months_back": 12})
+    )
+    assert short["closed_sales"]["count"] < long["closed_sales"]["count"]
+    assert short["market"]["closed_sales_window_months"] == 3
+
+
+def test_sold_within_months_excludes_unsold(provider: MockListingsProvider) -> None:
+    recent = provider.search(status="sold", sold_within_months=3, limit=500)
+    assert recent
+    assert all(listing.sold_date is not None for listing in recent)
+    assert len(recent) < len(provider.search(status="sold", limit=500))
+
+
+def test_lot_size_is_never_negative(provider: MockListingsProvider) -> None:
+    assert all(listing.lot_sqft >= 0 for listing in provider.search(status=None, limit=500))
+
+
+# --- lead qualification ---------------------------------------------------
+
+
+def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall(
+    provider: MockListingsProvider,
+) -> None:
+    """Regression: a $2M budget in a $683k market was reported as clearing 8%."""
+    tools = {tool.name: tool for tool in make_comms_tools(provider)}
+    payload = json.loads(
+        tools["qualify_lead"].invoke(
+            {
+                "name": "Jane",
+                "target_city": "Round Rock",
+                "budget_max": 2_000_000,
+                "timeline_months": 2,
+                "pre_approved": True,
+                "min_beds": 5,
+            }
+        )
+    )
+    feasibility = payload["market_feasibility"]
+    # Budget clears everything that meets the requirements; beds are binding.
+    assert feasibility["share_of_qualifying_inventory_affordable"] == 1.0
+    assert not any(
+        "Budget clears only" in signal for signal in payload["qualification"]["signals"]
+    )
+    assert any(
+        "requirements are narrowing" in signal
+        for signal in payload["qualification"]["signals"]
+    )
+
+
 # --- draft handoff --------------------------------------------------------
+
+
+def test_save_draft_survives_a_newline_in_the_subject(tmp_path, monkeypatch) -> None:
+    """Regression: a header newline raised *after* the .md was written, leaving
+    an orphan pointing at a .eml that never existed. Also blocks header injection."""
+    import real_estate_agent.tools.comms as comms
+
+    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
+    tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
+
+    payload = json.loads(
+        tools["save_draft"].invoke(
+            {
+                "filename": "injected",
+                "subject": "Shortlist\nBcc: attacker@evil.com",
+                "body": "Body text.",
+                "to": "jane@example.com",
+            }
+        )
+    )
+    eml = Path(payload["eml_path"])
+    assert Path(payload["markdown_path"]).exists() and eml.exists()
+
+    # The newline is collapsed, so the text survives *inside* the Subject value
+    # rather than becoming a header of its own. Parse rather than substring-match:
+    # "Bcc:" appearing in the subject text is harmless; a real Bcc header is not.
+    message = email.message_from_bytes(eml.read_bytes(), policy=email.policy.default)
+    assert message["Bcc"] is None, "must not have created a real Bcc header"
+    assert "\n" not in str(message["Subject"])
+    assert "attacker@evil.com" in str(message["Subject"])
+
+
+def test_save_draft_does_not_clobber_same_second_drafts(tmp_path, monkeypatch) -> None:
+    """Regression: second-resolution stamps silently overwrote a revision."""
+    import real_estate_agent.tools.comms as comms
+
+    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
+    tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
+
+    args = {"filename": "follow-up", "subject": "One", "body": "First version."}
+    first = json.loads(tools["save_draft"].invoke(args))
+    second = json.loads(tools["save_draft"].invoke({**args, "body": "Second version."}))
+
+    assert first["markdown_path"] != second["markdown_path"]
+    assert "First version." in Path(first["markdown_path"]).read_text()
+    assert "Second version." in Path(second["markdown_path"]).read_text()
+
+
+
 
 
 def test_save_draft_emits_md_eml_and_mailto(tmp_path, monkeypatch) -> None:
@@ -277,19 +399,14 @@ def test_save_draft_sanitises_filename(tmp_path, monkeypatch) -> None:
 
 
 def _rules() -> list[FilesystemPermission]:
-    """Mirrors build_agent's rules. First match wins, so order is load-bearing."""
-    return [
-        FilesystemPermission(
-            operations=["read", "write"], paths=["/workspace/**"], mode="allow"
-        ),
-        FilesystemPermission(operations=["read"], paths=["/skills/**"], mode="allow"),
-        FilesystemPermission(
-            operations=["read", "write"],
-            paths=["/.env", "/.env.*", "/.venv/**", "/.git/**"],
-            mode="deny",
-        ),
-        FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
-    ]
+    """The agent's real rules, imported not copied.
+
+    A hand-mirrored duplicate cannot fail when someone reorders the live list,
+    which is precisely the order-sensitive hazard this test exists to catch.
+    """
+    from real_estate_agent.agent import WORKSPACE_PERMISSIONS
+
+    return WORKSPACE_PERMISSIONS
 
 
 @pytest.mark.parametrize(
@@ -307,6 +424,50 @@ def _rules() -> list[FilesystemPermission]:
 def test_permission_matrix(operation: str, path: str, expected: str) -> None:
     op = cast(Literal["read", "write"], operation)
     assert _check_fs_permission(_rules(), op, path) == expected
+
+
+# --- approval gate (CLI) --------------------------------------------------
+
+
+def test_action_requests_flattens_every_pending_call() -> None:
+    """One decision per hanging tool call, or the middleware rejects the resume."""
+    import main
+
+    class FakeInterrupt:
+        def __init__(self, value):
+            self.value = value
+
+    interrupts = [
+        FakeInterrupt({"action_requests": [{"name": "save_draft", "args": {}}] * 2}),
+        FakeInterrupt({"action_requests": [{"name": "save_draft", "args": {}}]}),
+    ]
+    assert len(main._action_requests(interrupts)) == 3
+
+
+def test_prompt_returns_none_instead_of_raising(monkeypatch) -> None:
+    """Regression: EOF on piped stdin crashed the CLI with a traceback."""
+    import main
+
+    def boom(_prompt_text):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", boom)
+    assert main._prompt("Approve? ") is None
+
+
+def test_resume_payload_is_a_mapping_not_a_list() -> None:
+    """Regression: the middleware reads `interrupt(request)["decisions"]`.
+
+    A bare list raised `TypeError: list indices must be integers` the moment a
+    reviewer answered, making --require-approval unusable in both directions.
+    """
+    import inspect
+
+    import main
+
+    source = inspect.getsource(main._handle_interrupts)
+    assert 'Command(resume={"decisions": decisions})' in source
+    assert "Command(resume=decisions)" not in source
 
 
 # --- agent wiring ---------------------------------------------------------

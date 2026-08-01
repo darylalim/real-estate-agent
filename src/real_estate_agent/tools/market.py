@@ -70,6 +70,10 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
         high and `comps_found` is low, the subject is an outlier for its market
         — say so rather than stretching the remaining comps.
 
+        `screened_out` is null when the data source does not report screening
+        counts. Null means "not measured", not "nothing was screened" — do not
+        read it as evidence the comp set is complete.
+
         Args:
             listing_id: Subject property id, e.g. "MLS-1022".
             radius_miles: Search radius around the subject property.
@@ -89,8 +93,9 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
             )
             comps = list(comps_seq)
         else:
-            # Providers that only implement the protocol still work; they just
-            # cannot report what they screened out.
+            # Providers implementing only the required protocol still work.
+            # `None` (not `{}`) so the model can tell "not measured" from
+            # "nothing screened out" — see DiagnosticListingsProvider.
             subject = provider.get(listing_id)
             comps = list(
                 provider.comparables(
@@ -101,7 +106,7 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                     max_sqft_delta_pct=max_sqft_delta_pct,
                 )
             )
-            rejected = {}
+            rejected = None
 
         if subject is None:
             return json.dumps({"error": f"No listing found with id {listing_id!r}."})
@@ -159,19 +164,27 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                 city=city, state=state, property_type=property_type, status="active", limit=500
             )
         )
-        sold_all = list(
+        # The window must filter the numerator, not just divide it. Without
+        # `sold_within_months` the same sale set produced a 4x different
+        # months-of-inventory depending on a parameter that changed nothing.
+        sold_recent = list(
             provider.search(
-                city=city, state=state, property_type=property_type, status="sold", limit=500
+                city=city,
+                state=state,
+                property_type=property_type,
+                status="sold",
+                sold_within_months=months_back,
+                limit=500,
             )
         )
 
         active_stats = _summarize_prices(active)
-        sold_stats = _summarize_prices(sold_all)
+        sold_stats = _summarize_prices(sold_recent)
 
         # Months of inventory = active supply / average monthly absorption.
         months_of_inventory = None
-        if sold_all and months_back:
-            monthly_absorption = len(sold_all) / months_back
+        if sold_recent and months_back:
+            monthly_absorption = len(sold_recent) / months_back
             if monthly_absorption > 0:
                 months_of_inventory = round(len(active) / monthly_absorption, 1)
 
@@ -181,6 +194,7 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                     "city": city,
                     "state": state,
                     "property_type": property_type or "all",
+                    "closed_sales_window_months": months_back,
                 },
                 "active_inventory": active_stats,
                 "closed_sales": sold_stats,

@@ -7,6 +7,7 @@ injectable — tests and a real MLS feed use the same tool surface.
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from langchain.tools import tool
 from langchain_core.tools import BaseTool
@@ -25,8 +26,8 @@ def make_listing_tools(provider: ListingsProvider) -> list[BaseTool]:
         max_price: int | None = None,
         min_beds: int | None = None,
         min_baths: float | None = None,
-        property_type: str | None = None,
-        status: str = "active",
+        property_type: Literal["single_family", "condo", "townhouse"] | None = None,
+        status: Literal["active", "pending", "sold"] | None = "active",
         limit: int = 25,
     ) -> str:
         """Search property listings and return matches as JSON.
@@ -47,6 +48,7 @@ def make_listing_tools(provider: ListingsProvider) -> list[BaseTool]:
             min_baths: Minimum bathroom count (halves allowed, e.g. 2.5).
             property_type: One of "single_family", "condo", "townhouse".
             status: One of "active", "pending", "sold". Defaults to "active".
+                Pass null for any status.
             limit: Maximum number of listings to return.
         """
         results = provider.search(

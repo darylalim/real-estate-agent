@@ -61,11 +61,17 @@ class ListingsProvider(Protocol):
         min_baths: float | None = None,
         property_type: str | None = None,
         status: str | None = "active",
+        sold_within_months: int | None = None,
         limit: int = 25,
     ) -> Sequence[Listing]:
         """Return listings matching the filters, most relevant first.
 
         ``status`` defaults to active-only; pass ``None`` for any status.
+        Matching on ``status`` and ``property_type`` is case-insensitive.
+
+        ``sold_within_months`` keeps only sales closed within that many months,
+        and therefore excludes anything with no close date. The provider owns
+        its own notion of "now", so callers never have to guess at the clock.
         """
         ...
 
@@ -89,4 +95,26 @@ class ListingsProvider(Protocol):
         discards such comps anyway, so returning them only wastes the analyst's
         tokens. Pass ``None`` to disable the screen.
         """
+        ...
+
+
+class DiagnosticListingsProvider(ListingsProvider, Protocol):
+    """Optional extension: report what comp screening threw away.
+
+    Implementing this is not required, but it is worth it. Without it
+    ``find_comparables`` returns ``screened_out: null``, and the market analyst
+    loses the signal that separates "this subject is a size outlier" from
+    "this market is thin" — it is told to reason about exactly that.
+    """
+
+    def comparables_with_diagnostics(
+        self,
+        listing_id: str,
+        *,
+        radius_miles: float = 1.5,
+        months_back: int = 6,
+        limit: int = 8,
+        max_sqft_delta_pct: float | None = 0.30,
+    ) -> tuple[Listing | None, list[Listing], dict[str, int]]:
+        """Return ``(subject, comps, rejection_counts_by_reason)``."""
         ...
