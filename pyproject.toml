@@ -30,6 +30,12 @@ pythonpath = ["."]
 # would quietly mean something other than what CLAUDE.md claims. There is no
 # equivalent for ty: it has no required-version, so its pin stays a convention.
 required-version = "==0.16.1"
+# Deliberately no target-version. ruff infers py311 from requires-python -- the
+# floor the code must support -- exactly as ty infers 3.11 for its own checks.
+# Setting target-version = "py314" to "match" .python-version is the tempting
+# consistency fix and it is wrong: UP autofixes would then emit 3.12+ syntax
+# (UP040's `type` alias, for one) that does not parse on 3.11. The default test
+# run is 3.14, so only the explicit 3.11 leg in CLAUDE.md would catch it.
 
 [tool.ruff.lint]
 # extend-select, not select. An earlier version of this file replaced the

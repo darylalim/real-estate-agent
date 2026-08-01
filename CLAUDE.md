@@ -26,9 +26,10 @@ uv run python main.py                            # interactive
 uv run python main.py --require-approval         # pause before save_draft
 uv run python main.py --thread <id>              # continue a conversation
 
-uv run pytest tests/ -q                          # full suite: 38 tests, ~0.7s, no API calls
+uv run pytest tests/ -q                          # full suite: 42 tests, ~0.7s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
+uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
 
 uvx ty@0.0.65 check                              # type check — pinned; not a declared dependency
 uvx ruff@0.16.1 check .                          # lint — pinned; rule set in pyproject.toml
@@ -66,8 +67,19 @@ test module already imports `real_estate_agent.tools.comms` at module scope, so 
 `sys.modules` regardless, and `monkeypatch.setattr` rebinds the same global either way. Those imports can be
 hoisted; only `documents.py`'s lazy `pypdf` and `__init__.py`'s lazy `build_agent` are deliberate.
 
+**Run the 3.11 leg before changing anything the type system touches.** `.python-version` pins development to
+3.14, so without it the `requires-python = ">=3.11"` floor is never executed on any machine — the promise
+would be checked only by ty's syntax-level view, never at runtime. `--isolated` builds a throwaway environment
+so your 3.14 venv is untouched; it costs one resolve, then ~3s. If it ever fails, the honest fix is usually to
+narrow `requires-python`, not to delete the leg.
+
 The whole suite runs offline. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy
 key to assert on wiring only, so there is no reason to skip tests for cost or network.
+
+The last four tests are of a different kind: they check the *toolchain config*, not the agent. They read the
+live `pyproject.toml` and the pinned versions written in this file and `README.md`, and fail when those
+disagree — the ruff pin, `extend-select`, and `error-on-warning` are otherwise all silently droppable. Each
+was verified to fail on the drift it describes, not merely to pass today.
 
 ## Architecture
 

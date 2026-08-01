@@ -23,9 +23,16 @@ uv run python main.py
 Checks — all three must pass. No API calls, no key required:
 
 ```bash
-uv run pytest tests/ -q       # 38 tests, ~0.7s
+uv run pytest tests/ -q       # 42 tests, ~0.7s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
+```
+
+Development is pinned to Python 3.14, so the `requires-python = ">=3.11"` floor needs an explicit run —
+`--isolated` keeps it out of your project venv:
+
+```bash
+uv run --python 3.11 --isolated pytest tests/ -q
 ```
 
 The definition of done is "N tests, ty clean, ruff clean", and both tool versions are pinned deliberately —

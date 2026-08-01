@@ -11,14 +11,19 @@ from __future__ import annotations
 import email
 import email.policy
 import json
+import re
+import tomllib
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pytest
 from deepagents import FilesystemPermission
 from deepagents.middleware.filesystem import _check_fs_permission
+from langchain_core.tools import BaseTool
 
+from real_estate_agent.config import PROJECT_ROOT
 from real_estate_agent.providers import MockListingsProvider
+from real_estate_agent.tools import comms, documents
 from real_estate_agent.tools.comms import make_comms_tools
 from real_estate_agent.tools.documents import make_document_tools
 from real_estate_agent.tools.market import make_market_tools
@@ -27,6 +32,23 @@ from real_estate_agent.tools.market import make_market_tools
 @pytest.fixture
 def provider() -> MockListingsProvider:
     return MockListingsProvider()
+
+
+@pytest.fixture
+def comms_tools(tmp_path, monkeypatch) -> dict[str, BaseTool]:
+    """Comms tools whose drafts land in a temp dir instead of the real workspace.
+
+    Patching `comms.DRAFTS_DIR` only works because `save_draft` reads that global
+    at call time. Bind it into a default argument or a local alias and this
+    fixture silently stops working — the tests keep passing while writing into
+    the real `workspace/drafts/`. `test_save_draft_sanitises_filename` asserts on
+    `tmp_path` for exactly that reason, so the failure stays loud.
+
+    Request `tmp_path` alongside this fixture to assert on paths; pytest hands
+    both the same directory.
+    """
+    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
+    return {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
 
 
 def _subject_with_comps(provider: MockListingsProvider, minimum: int = 3):
@@ -193,8 +215,6 @@ def test_document_extraction_rejects_traversal(path: str) -> None:
 
 
 def test_document_extraction_reads_a_real_file(tmp_path, monkeypatch) -> None:
-    from real_estate_agent.tools import documents
-
     monkeypatch.setattr(documents, "DOCUMENTS_DIR", tmp_path)
     (tmp_path / "lease.md").write_text("Rent is $2,400 per month.", encoding="utf-8")
 
@@ -275,16 +295,11 @@ def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall(
 # --- draft handoff --------------------------------------------------------
 
 
-def test_save_draft_survives_a_newline_in_the_subject(tmp_path, monkeypatch) -> None:
+def test_save_draft_survives_a_newline_in_the_subject(comms_tools) -> None:
     """Regression: a header newline raised *after* the .md was written, leaving
     an orphan pointing at a .eml that never existed. Also blocks header injection."""
-    from real_estate_agent.tools import comms
-
-    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
-    tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
-
     payload = json.loads(
-        tools["save_draft"].invoke(
+        comms_tools["save_draft"].invoke(
             {
                 "filename": "injected",
                 "subject": "Shortlist\nBcc: attacker@evil.com",
@@ -305,33 +320,22 @@ def test_save_draft_survives_a_newline_in_the_subject(tmp_path, monkeypatch) -> 
     assert "attacker@evil.com" in str(message["Subject"])
 
 
-def test_save_draft_does_not_clobber_same_second_drafts(tmp_path, monkeypatch) -> None:
+def test_save_draft_does_not_clobber_same_second_drafts(comms_tools) -> None:
     """Regression: second-resolution stamps silently overwrote a revision."""
-    from real_estate_agent.tools import comms
-
-    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
-    tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
-
     args = {"filename": "follow-up", "subject": "One", "body": "First version."}
-    first = json.loads(tools["save_draft"].invoke(args))
-    second = json.loads(tools["save_draft"].invoke({**args, "body": "Second version."}))
+    first = json.loads(comms_tools["save_draft"].invoke(args))
+    second = json.loads(
+        comms_tools["save_draft"].invoke({**args, "body": "Second version."})
+    )
 
     assert first["markdown_path"] != second["markdown_path"]
     assert "First version." in Path(first["markdown_path"]).read_text()
     assert "Second version." in Path(second["markdown_path"]).read_text()
 
 
-
-
-
-def test_save_draft_emits_md_eml_and_mailto(tmp_path, monkeypatch) -> None:
-    from real_estate_agent.tools import comms
-
-    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
-    tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
-
+def test_save_draft_emits_md_eml_and_mailto(comms_tools) -> None:
     payload = json.loads(
-        tools["save_draft"].invoke(
+        comms_tools["save_draft"].invoke(
             {
                 "filename": "follow-up-jane",
                 "subject": "Round Rock shortlist",
@@ -358,15 +362,10 @@ def test_save_draft_emits_md_eml_and_mailto(tmp_path, monkeypatch) -> None:
     assert "Round%20Rock%20shortlist" in payload["mailto_url"]
 
 
-def test_save_draft_omits_mailto_when_body_too_long(tmp_path, monkeypatch) -> None:
+def test_save_draft_omits_mailto_when_body_too_long(comms_tools) -> None:
     """mailto: silently truncates in real clients, so degrade explicitly."""
-    from real_estate_agent.tools import comms
-
-    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
-    tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
-
     payload = json.loads(
-        tools["save_draft"].invoke(
+        comms_tools["save_draft"].invoke(
             {
                 "filename": "long",
                 "subject": "Long one",
@@ -380,14 +379,11 @@ def test_save_draft_omits_mailto_when_body_too_long(tmp_path, monkeypatch) -> No
     assert Path(payload["eml_path"]).exists(), "the .eml must still be the fallback"
 
 
-def test_save_draft_sanitises_filename(tmp_path, monkeypatch) -> None:
-    from real_estate_agent.tools import comms
-
-    monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
-    tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
-
+def test_save_draft_sanitises_filename(comms_tools, tmp_path) -> None:
+    """Also the canary for the fixture's monkeypatch: if patching DRAFTS_DIR ever
+    stops taking effect, drafts land in the real workspace and this fails."""
     payload = json.loads(
-        tools["save_draft"].invoke(
+        comms_tools["save_draft"].invoke(
             {"filename": "../../escape/attempt", "subject": "s", "body": "b"}
         )
     )
@@ -517,3 +513,64 @@ def test_subagents_carry_their_own_skills() -> None:
     assert by_name["market-analyst"]["skills"] == ["/skills/cma-analysis"]
     assert by_name["document-reviewer"]["skills"] == ["/skills/document-review"]
     assert by_name["client-liaison"]["skills"] == ["/skills/client-comms"]
+
+
+# --- toolchain configuration ----------------------------------------------
+#
+# "N tests, ty clean, ruff clean" is only a gate if "clean" cannot quietly
+# change meaning. These read the live pyproject and the live docs rather than a
+# copy, for the same reason `_rules()` imports WORKSPACE_PERMISSIONS: a
+# hand-mirrored duplicate cannot fail when someone edits the original.
+
+
+def _pyproject() -> dict[str, Any]:
+    return tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def _documented_pins(tool: str) -> set[str]:
+    """Every `uvx <tool>@<version>` pin written in the docs."""
+    found: set[str] = set()
+    for name in ("CLAUDE.md", "README.md"):
+        text = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+        found.update(re.findall(rf"uvx {tool}@([0-9]+(?:\.[0-9]+)*)", text))
+    return found
+
+
+def test_ruff_pin_is_enforced_not_merely_documented() -> None:
+    """A version inside a Markdown fence enforces nothing.
+
+    Without `required-version`, a bare `uvx ruff check .` resolves whatever is
+    newest, applies a different rule set, and still prints "All checks passed!".
+    """
+    required = _pyproject()["tool"]["ruff"]["required-version"]
+    assert required.startswith("=="), "pin an exact version, not a range"
+    assert _documented_pins("ruff") == {required.removeprefix("==")}, (
+        "the documented `uvx ruff@...` invocations and required-version disagree"
+    )
+
+
+def test_ty_pin_is_consistent_across_docs() -> None:
+    """ty has no `required-version`, so its pin is a convention nothing enforces.
+
+    The strongest check available is that the docs do not contradict each other.
+    If ty ever grows the setting, tighten this the way the ruff test is written.
+    """
+    assert len(_documented_pins("ty")) == 1
+
+
+def test_ruff_extends_the_defaults_rather_than_replacing_them() -> None:
+    """`select` silently drops every default rule not re-listed.
+
+    An earlier config did exactly that and gave up ~300 rules this codebase
+    already passed, B006, BLE001 and DTZ005 among them. `required-version` is
+    what fixes which defaults apply, so `select` has nothing left to buy.
+    """
+    lint = _pyproject()["tool"]["ruff"]["lint"]
+    assert "select" not in lint, "use extend-select; select discards the defaults"
+    assert {"I", "UP", "PLR0402"} <= set(lint["extend-select"])
+
+
+def test_ty_fails_the_build_on_warnings() -> None:
+    """Adopted at zero warnings — the only cheap moment. Dropping it lets them
+    accumulate with nothing reporting that the gate got weaker."""
+    assert _pyproject()["tool"]["ty"]["terminal"]["error-on-warning"] is True
