@@ -576,25 +576,34 @@ def test_ty_fails_the_build_on_warnings() -> None:
     assert _pyproject()["tool"]["ty"]["terminal"]["error-on-warning"] is True
 
 
+# Every option that collects a subset. A subset says nothing about the whole
+# suite's size, and CLAUDE.md documents `-k "traversal"` as a normal invocation.
+# `lf`/`failedfirst` matter most: this test counting itself means a filtered run
+# fails it, which puts it in the last-failed set, which makes the next `--lf`
+# collect only it — a red `--lf` that no code change can clear.
+_SUBSETTING_OPTIONS = ("keyword", "markexpr", "deselect", "lf", "failedfirst", "stepwise")
+
+
 def test_documented_test_count_matches_the_suite(request: pytest.FixtureRequest) -> None:
     """The suite size is written into CLAUDE.md and README.md and drifts silently.
 
     This one counts itself, which is the point: adding a test is exactly the
-    moment the documented number goes stale, so the check has to run then.
+    moment the documented number goes stale, so the check has to fire then.
 
-    Skipped on a filtered run. `-k`, `-m`, and an explicit node id all collect a
-    subset — CLAUDE.md documents `-k "traversal"` as a normal invocation — and a
-    subset says nothing about the whole suite's size.
+    It is enforced by full-suite runs and by nothing else — see the skip guard.
     """
     option = request.config.option
-    if option.keyword or option.markexpr:
-        pytest.skip("filtered with -k/-m; the count is only meaningful for the whole suite")
+    filtered = [name for name in _SUBSETTING_OPTIONS if getattr(option, name, None)]
+    if filtered:
+        pytest.skip(f"filtered run ({', '.join(filtered)}); the count needs the whole suite")
     if any("::" in argument for argument in request.config.args):
         pytest.skip("explicit node id collects a subset")
 
     total = request.session.testscollected
     for name in ("CLAUDE.md", "README.md"):
         text = (PROJECT_ROOT / name).read_text(encoding="utf-8")
-        assert f"{total} tests" in text, (
-            f"{name} does not say {total} tests, which is what the suite now collects"
+        # Anchored: an unanchored "43 tests" also matches "143 tests".
+        assert re.search(rf"\b{total} tests\b", text), (
+            f"{name} does not say {total} tests, which is what this run collected. "
+            "If this was a filtered run, the guard above missed a subsetting option."
         )
