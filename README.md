@@ -10,7 +10,7 @@ its own context window, and a shared `/workspace/` filesystem.
 
 ```bash
 cp .env.example .env          # add your ANTHROPIC_API_KEY
-uv sync
+uv sync                       # Python 3.14, pinned by .python-version
 uv run python main.py "Find 3-bed homes in Round Rock under $600k"
 ```
 
@@ -20,11 +20,18 @@ Interactive mode:
 uv run python main.py
 ```
 
-Tests (no API calls, no key required):
+Checks — all three must pass. No API calls, no key required:
 
 ```bash
-uv run pytest tests/ -q
+uv run pytest tests/ -q       # 38 tests, ~0.7s
+uvx ty@0.0.65 check           # type check
+uvx ruff@0.16.1 check .       # lint
 ```
+
+The definition of done is "N tests, ty clean, ruff clean", and both tool versions are pinned deliberately —
+each is pre-1.0, so an unpinned run can report a different result on identical source. ruff enforces its own
+pin via `required-version` and will refuse to run if you drop it; ty has no equivalent, so that one is on you.
+`ruff format` is deliberately **not** used here — see `CLAUDE.md`.
 
 ## Architecture
 

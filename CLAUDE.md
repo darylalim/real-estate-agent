@@ -34,25 +34,37 @@ uvx ty@0.0.65 check                              # type check — pinned; not a 
 uvx ruff@0.16.1 check .                          # lint — pinned; rule set in pyproject.toml
 ```
 
-**Definition of done in this repo is "N tests, ty clean, ruff clean"** — every commit message ends with it
-(commits before ruff was adopted end with the two-part form). All three are pinned so the phrase means the
-same thing on any machine: `.python-version` fixes the interpreter at 3.14 (`requires-python` alone only sets
-a floor, so a fresh `uv sync` elsewhere would pick whatever newest interpreter it found), and the `ty` and
-`ruff` versions are pinned **in the command** rather than in `pyproject.toml` — `uvx` runs each in its own
-ephemeral environment, so their dependencies never enter `uv.lock`, but that also hides the version. Both are
-pre-1.0 and their diagnostics move fast; unpinned, "clean" can flip between two runs on identical source. Bump
-a pin deliberately, don't drop it. `pytest` is the only dev dependency, and `.gitignore` already ignores
+**Definition of done in this repo is "N tests, ty clean, ruff clean"** — most commit messages end with some
+form of it, though not all: `9227e4d` has no done-line and `da55993` ends "21 tests, no API calls. Live
+end-to-end behaviour is unverified." Follow it going forward rather than reading it as an invariant already
+holding over the whole history. All three parts are pinned so the phrase means the same thing on any machine:
+`.python-version` fixes the interpreter at 3.14 (`requires-python` alone only sets a floor, so a fresh
+`uv sync` elsewhere would pick whatever newest interpreter it found), and the `ty` and `ruff` versions are
+pinned **in the command** rather than added to `pyproject.toml` as dependencies — `uvx` runs each in its own
+ephemeral environment, so neither one's dependencies enter `uv.lock`, but that also hides the version. Both
+are pre-1.0 and their diagnostics move fast; unpinned, "clean" can flip between two runs on identical source.
+
+**Only ruff's pin is enforced.** `required-version = "==0.16.1"` in `pyproject.toml` makes a mismatched ruff
+hard-fail (exit 2) rather than silently applying a different rule set — verified against 0.15.0. ty has no
+such setting, so `uvx ty@0.0.65` is a convention that nothing checks; there is no CI here either. Bump a pin
+deliberately, don't drop it. `pytest` is the only dev dependency, and `.gitignore` already ignores
 `.ruff_cache/` and `.ty_cache/`.
 
 **`ruff check` yes, `ruff format` no.** The formatter would rewrite 7 of the 14 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
 reports a total of 19, not 14: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
-this file, and the three `SKILL.md` files are in its denominator. All 7 rewrites are `.py`.) The rule set in
-`pyproject.toml` uses `select`, not `extend-select`, because ruff's own defaults have widened across releases
-and inheriting them reintroduces exactly the drift the version pins remove. The comment there records which
-rule families were measured against this codebase and rejected: `PLC0415` and `PLR0913` in particular would
-flag deliberate design (the lazy `pypdf` import, the in-test imports that exist so `monkeypatch` can reach
-module globals, and the intentionally wide tool signatures that form the model's parameter surface).
+this file, and the three `SKILL.md` files are in its denominator. All 7 rewrites are `.py`.) A consequence
+worth knowing: blank-line and whitespace structure has no gate at all, since `E3` is preview-only in 0.16.1
+and the formatter is the only other thing that would catch it.
+
+**The rule set is `extend-select`, not `select`.** Replacing the defaults outright looks like it protects
+against them widening across releases, but `required-version` already fixes which defaults apply, so the
+replacement bought nothing and silently dropped ~300 rules the codebase already passes — including `B006`,
+`BLE001`, and `DTZ005`. Add rules here; don't take the defaults away. A prior version of this file claimed the
+function-scoped imports in `tests/` exist so `monkeypatch` can reach module globals. **That is false** — the
+test module already imports `real_estate_agent.tools.comms` at module scope, so the module object is in
+`sys.modules` regardless, and `monkeypatch.setattr` rebinds the same global either way. Those imports can be
+hoisted; only `documents.py`'s lazy `pypdf` and `__init__.py`'s lazy `build_agent` are deliberate.
 
 The whole suite runs offline. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy
 key to assert on wiring only, so there is no reason to skip tests for cost or network.
