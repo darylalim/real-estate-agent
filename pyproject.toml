@@ -23,6 +23,24 @@ testpaths = ["tests"]
 # are not importable and would go untested.
 pythonpath = ["."]
 
+[tool.ruff.lint]
+# Selected explicitly rather than inheriting ruff's defaults, which have widened
+# across releases -- 0.16 flags rules 0.5 did not. Same reasoning as
+# .python-version and the pinned ty version: the check must mean the same thing
+# on any version, or "clean" is not a gate.
+#
+# Deliberately NOT selected, having been measured against this codebase:
+#   PLC0415  import-outside-top-level -- 15 hits, all intentional: pypdf is
+#            imported lazily in documents.py, and the tests import modules
+#            inside test bodies precisely so monkeypatch can reach the globals.
+#   PLR0913  too-many-arguments -- the tool signatures are wide on purpose;
+#            they are the model's parameter surface, not internal APIs.
+#   PLR2004  magic-value-comparison -- 20 hits, all assertions in tests.
+#   E501     line-too-long -- 20 pre-existing; no line-length discipline here.
+# PLR0402 is pulled in as a single rule rather than via PL, which would drag in
+# all of the above.
+select = ["E4", "E7", "E9", "F", "I", "UP", "PLR0402"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

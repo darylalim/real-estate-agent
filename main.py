@@ -10,7 +10,8 @@ from __future__ import annotations
 import argparse
 import sys
 import uuid
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.types import Command

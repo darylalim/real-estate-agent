@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote, urlencode
@@ -219,7 +219,7 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
         to = _collapse_whitespace(to)
 
         stem = _SAFE_FILENAME.sub("-", filename).strip("-.") or "draft"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
         # Second-resolution stamps collide when a draft is revised in the same
         # turn. Silently overwriting the earlier copy is the exact failure this

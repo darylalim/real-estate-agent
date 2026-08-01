@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Literal, cast
 
 import pytest
-
 from deepagents import FilesystemPermission
 from deepagents.middleware.filesystem import _check_fs_permission
 
@@ -194,7 +193,7 @@ def test_document_extraction_rejects_traversal(path: str) -> None:
 
 
 def test_document_extraction_reads_a_real_file(tmp_path, monkeypatch) -> None:
-    import real_estate_agent.tools.documents as documents
+    from real_estate_agent.tools import documents
 
     monkeypatch.setattr(documents, "DOCUMENTS_DIR", tmp_path)
     (tmp_path / "lease.md").write_text("Rent is $2,400 per month.", encoding="utf-8")
@@ -279,7 +278,7 @@ def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall(
 def test_save_draft_survives_a_newline_in_the_subject(tmp_path, monkeypatch) -> None:
     """Regression: a header newline raised *after* the .md was written, leaving
     an orphan pointing at a .eml that never existed. Also blocks header injection."""
-    import real_estate_agent.tools.comms as comms
+    from real_estate_agent.tools import comms
 
     monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
     tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
@@ -308,7 +307,7 @@ def test_save_draft_survives_a_newline_in_the_subject(tmp_path, monkeypatch) -> 
 
 def test_save_draft_does_not_clobber_same_second_drafts(tmp_path, monkeypatch) -> None:
     """Regression: second-resolution stamps silently overwrote a revision."""
-    import real_estate_agent.tools.comms as comms
+    from real_estate_agent.tools import comms
 
     monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
     tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
@@ -326,7 +325,7 @@ def test_save_draft_does_not_clobber_same_second_drafts(tmp_path, monkeypatch) -
 
 
 def test_save_draft_emits_md_eml_and_mailto(tmp_path, monkeypatch) -> None:
-    import real_estate_agent.tools.comms as comms
+    from real_estate_agent.tools import comms
 
     monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
     tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
@@ -361,7 +360,7 @@ def test_save_draft_emits_md_eml_and_mailto(tmp_path, monkeypatch) -> None:
 
 def test_save_draft_omits_mailto_when_body_too_long(tmp_path, monkeypatch) -> None:
     """mailto: silently truncates in real clients, so degrade explicitly."""
-    import real_estate_agent.tools.comms as comms
+    from real_estate_agent.tools import comms
 
     monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
     tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
@@ -382,7 +381,7 @@ def test_save_draft_omits_mailto_when_body_too_long(tmp_path, monkeypatch) -> No
 
 
 def test_save_draft_sanitises_filename(tmp_path, monkeypatch) -> None:
-    import real_estate_agent.tools.comms as comms
+    from real_estate_agent.tools import comms
 
     monkeypatch.setattr(comms, "DRAFTS_DIR", tmp_path)
     tools = {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}

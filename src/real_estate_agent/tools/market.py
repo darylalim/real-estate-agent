@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import statistics
-from typing import Sequence
+from collections.abc import Sequence
 
 from langchain.tools import tool
 from langchain_core.tools import BaseTool

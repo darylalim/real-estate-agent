@@ -26,17 +26,26 @@ uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one
 uv run pytest -q -k "traversal"                  # by keyword
 
 uvx ty@0.0.65 check                              # type check — pinned; not a declared dependency
+uvx ruff@0.16.1 check .                          # lint — pinned; rule set in pyproject.toml
 ```
 
-**Definition of done in this repo is "N tests, ty clean"** — every commit message so far ends with it. Both
-halves of that phrase are pinned so they mean the same thing on any machine: `.python-version` fixes the
+**Definition of done in this repo is "N tests, ty clean, ruff clean"** — every commit message ends with it
+(commits before ruff was adopted end with the two-part form). All three are pinned so the phrase means the
+same thing on any machine: `.python-version` fixes the
 interpreter at 3.14 (`requires-python` alone only sets a floor, so a fresh `uv sync` elsewhere would pick
-whatever newest interpreter it found), and the `ty` version is pinned **in the command** rather than in
-`pyproject.toml` — `uvx` runs it in its own ephemeral environment, so ty's dependencies never enter `uv.lock`,
-but that also hides the version. ty is pre-1.0 and its diagnostics move fast; unpinned, "ty clean" can flip
-between two runs on identical source. Bump the pin deliberately, don't drop it. `pytest` is the only dev
-dependency, and `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`. No formatter or linter is
-configured.
+whatever newest interpreter it found), and the `ty` and `ruff` versions are pinned **in the command** rather
+than in `pyproject.toml` — `uvx` runs each in its own ephemeral environment, so their dependencies never enter
+`uv.lock`, but that also hides the version. Both are pre-1.0 and their diagnostics move fast; unpinned,
+"clean" can flip between two runs on identical source. Bump a pin deliberately, don't drop it. `pytest` is the
+only dev dependency, and `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
+
+**`ruff check` yes, `ruff format` no.** The formatter would rewrite 7 of the 19 Python files — line-wrapping
+disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. The rule set in
+`pyproject.toml` uses `select`, not `extend-select`, because ruff's own defaults have widened across releases
+and inheriting them reintroduces exactly the drift the version pins remove. The comment there records which
+rule families were measured against this codebase and rejected: `PLC0415` and `PLR0913` in particular would
+flag deliberate design (the lazy `pypdf` import, the in-test imports that exist so `monkeypatch` can reach
+module globals, and the intentionally wide tool signatures that form the model's parameter surface).
 
 The whole suite runs offline. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy
 key to assert on wiring only, so there is no reason to skip tests for cost or network.

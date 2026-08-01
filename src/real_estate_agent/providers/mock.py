@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Sequence
 
 from real_estate_agent.providers.base import Listing
 
