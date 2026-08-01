@@ -570,6 +570,31 @@ def test_ruff_extends_the_defaults_rather_than_replacing_them() -> None:
     assert {"I", "UP", "PLR0402"} <= set(lint["extend-select"])
 
 
+def _check_script_pin(tool: str) -> str:
+    """The version `scripts/check.sh` actually runs for ``tool``."""
+    text = (PROJECT_ROOT / "scripts" / "check.sh").read_text(encoding="utf-8")
+    match = re.search(rf"^{tool.upper()}_VERSION=([0-9.]+)$", text, re.MULTILINE)
+    assert match, f"scripts/check.sh does not define {tool.upper()}_VERSION"
+    return match.group(1)
+
+
+def test_check_script_pins_match_the_docs() -> None:
+    """`scripts/check.sh` is where the pins are enforced rather than described.
+
+    A version inside a Markdown fence binds whoever reads the fence. The script
+    binds whoever runs the script — a human shell, the Stop hook, or any future
+    CI — which is the same reason `required-version` beats documenting the ruff
+    pin. This test is what stops the two drifting apart.
+    """
+    assert _check_script_pin("ruff") == _pyproject()["tool"]["ruff"][
+        "required-version"
+    ].removeprefix("==")
+    for tool in ("ruff", "ty"):
+        assert _documented_pins(tool) == {_check_script_pin(tool)}, (
+            f"scripts/check.sh runs a different {tool} than the docs document"
+        )
+
+
 def test_ty_fails_the_build_on_warnings() -> None:
     """Adopted at zero warnings — the only cheap moment. Dropping it lets them
     accumulate with nothing reporting that the gate got weaker."""

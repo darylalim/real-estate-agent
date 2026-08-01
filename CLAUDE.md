@@ -26,7 +26,10 @@ uv run python main.py                            # interactive
 uv run python main.py --require-approval         # pause before save_draft
 uv run python main.py --thread <id>              # continue a conversation
 
-uv run pytest tests/ -q                          # full suite: 43 tests, ~0.7s, no API calls
+scripts/check.sh                                 # the whole definition of done
+scripts/check.sh --floor                         # the above, plus the 3.11 leg
+
+uv run pytest tests/ -q                          # full suite: 44 tests, ~0.7s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -34,6 +37,10 @@ uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
 uvx ty@0.0.65 check                              # type check — pinned; not a declared dependency
 uvx ruff@0.16.1 check .                          # lint — pinned; rule set in pyproject.toml
 ```
+
+**Prefer `scripts/check.sh`.** It is where the pins are enforced rather than described: a version inside a
+Markdown fence binds whoever reads the fence, the script binds whoever runs it. The individual commands above
+still work and are worth knowing, but the script is the one to run before saying you are done.
 
 **Definition of done in this repo is "N tests, ty clean, ruff clean"** — most commit messages end with some
 form of it, though not all: `9227e4d` has no done-line and `da55993` ends "21 tests, no API calls. Live
@@ -45,9 +52,12 @@ pinned **in the command** rather than added to `pyproject.toml` as dependencies 
 ephemeral environment, so neither one's dependencies enter `uv.lock`, but that also hides the version. Both
 are pre-1.0 and their diagnostics move fast; unpinned, "clean" can flip between two runs on identical source.
 
-**Only ruff's pin is enforced.** `required-version = "==0.16.1"` in `pyproject.toml` makes a mismatched ruff
-hard-fail (exit 2) rather than silently applying a different rule set — verified against 0.15.0. ty has no
-such setting, so `uvx ty@0.0.65` is a convention that nothing checks; there is no CI here either. Bump a pin
+**ruff's pin is self-enforcing; ty's is enforced by the wrapper.** `required-version = "==0.16.1"` in
+`pyproject.toml` makes a mismatched ruff hard-fail (exit 2) rather than silently applying a different rule
+set — verified against 0.15.0. ty has no such setting, so its pin holds only for callers who go through
+`scripts/check.sh`; `uvx ty check` typed directly still resolves whatever is newest. That is a real gap, just
+a narrower one than before, and `test_check_script_pins_match_the_docs` at least stops the script and the docs
+disagreeing. There is still no CI here — the hooks in `.claude/` run on one machine only. Bump a pin
 deliberately, don't drop it. `pytest` is the only dev dependency, and `.gitignore` already ignores
 `.ruff_cache/` and `.ty_cache/`.
 
@@ -76,15 +86,43 @@ narrow `requires-python`, not to delete the leg.
 The whole suite runs offline. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy
 key to assert on wiring only, so there is no reason to skip tests for cost or network.
 
-The last five tests are of a different kind: they check the *toolchain config*, not the agent. They read the
-live `pyproject.toml` and the pinned versions written in this file and `README.md`, and fail when those
-disagree — the ruff pin, `extend-select`, and `error-on-warning` are otherwise all silently droppable. Each
-was verified to fail on the drift it describes, not merely to pass today.
+The last six tests are of a different kind: they check the *toolchain config*, not the agent, and fail when
+the config and the docs disagree. Four read the live `pyproject.toml` and the pins written in this file and
+`README.md` — the ruff pin, `extend-select`, and `error-on-warning` are otherwise all silently droppable.
+`test_check_script_pins_match_the_docs` extends that to `scripts/check.sh`, which is the thing that actually
+runs them. Each was verified to fail on the drift it describes, not merely to pass today.
 
-`test_documented_test_count_matches_the_suite` is the odd one out: it counts itself, via
-`request.session.testscollected`, because adding a test is precisely when the number written above goes
-stale. It skips on `-k`, `-m`, or an explicit node id, since a filtered run collects a subset and says
-nothing about the whole suite — so the count is enforced by the full-suite runs and by nothing else.
+`test_documented_test_count_matches_the_suite` is the odd one out: it reads no config at all, and it counts
+itself via `request.session.testscollected`, because adding a test is precisely when the number written above
+goes stale. It skips on anything that collects a subset — `-k`, `-m`, `--deselect`, `--lf`, `--ff`, `--sw`, or
+an explicit node id — so the count is enforced by full-suite runs and by nothing else. The `--lf` case is the
+one to keep in mind: without that skip, a filtered run fails the test, which puts it in the last-failed set,
+which makes the next `--lf` collect only it. That is a red `--lf` no code change clears.
+
+## The hooks in `.claude/`
+
+Four hooks, checked in, active only inside Claude Code. They are **local convenience, not a gate anyone else
+inherits** — a clone without Claude Code gets none of them, which is why the enforcement that matters lives in
+`pyproject.toml`, `scripts/check.sh`, and `tests/`.
+
+| Hook | Event | Does |
+|---|---|---|
+| `session-start.sh` | SessionStart | Records the starting commit, so the Stop gate can see work committed mid-turn |
+| `static-gate.sh` | PostToolUse(Edit\|Write) | ruff + ty on `.py` edits, 0.12s |
+| `protect-files.sh` | PreToolUse | Denies `.env` and `uv.lock` via Edit/Write/NotebookEdit, and `.env` reads via Bash |
+| `done-gate.sh` | Stop | `scripts/check.sh` always; the 3.11 floor leg when Python changed |
+
+Three things about them worth knowing before editing:
+
+- **`done-gate.sh` runs `check.sh` unconditionally.** It used to gate on a changed `*.py`, which skipped the
+  suite on exactly the edits the toolchain tests exist to catch — a `pyproject.toml` that drops
+  `required-version`, or a stale count in this file. 1.7s is cheap enough not to need the cleverness.
+- **The Stop gate stands down after three consecutive blocks.** Exit 2 on Stop forces the turn to continue, so
+  a failure no code change fixes — the floor leg needs the network — would otherwise loop forever.
+- **`protect-files.sh`'s Bash arm is a speed bump, not a boundary.** `E=.env; cat $E` defeats it. It exists for
+  the accidental `cat .env`, not for an adversary. An earlier version of this hook layer also tried to police
+  `ruff format` and the ty pin by matching shell strings; that was deleted rather than patched, because
+  `cat x && uvx ruff format .` walked straight through it and the guard read as protection it did not provide.
 
 ## Architecture
 
