@@ -13,7 +13,7 @@ silently.
 ## Commands
 
 ```bash
-uv sync                                          # install (Python >=3.11; the venv here is 3.14)
+uv sync                                          # install (Python pinned to 3.14 by .python-version)
 cp .env.example .env                             # then add ANTHROPIC_API_KEY
 
 uv run python main.py "Find 3-bed homes in Round Rock under $600k"
@@ -25,12 +25,18 @@ uv run pytest tests/ -q                          # full suite: 38 tests, ~0.7s, 
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 
-uvx ty check                                     # type check — not a declared dependency
+uvx ty@0.0.65 check                              # type check — pinned; not a declared dependency
 ```
 
-**Definition of done in this repo is "N tests, ty clean"** — every commit message so far ends with it. `ty` is
-run ad hoc through `uvx` rather than declared in `pyproject.toml`; `pytest` is the only dev dependency, and
-`.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`. No formatter or linter is configured.
+**Definition of done in this repo is "N tests, ty clean"** — every commit message so far ends with it. Both
+halves of that phrase are pinned so they mean the same thing on any machine: `.python-version` fixes the
+interpreter at 3.14 (`requires-python` alone only sets a floor, so a fresh `uv sync` elsewhere would pick
+whatever newest interpreter it found), and the `ty` version is pinned **in the command** rather than in
+`pyproject.toml` — `uvx` runs it in its own ephemeral environment, so ty's dependencies never enter `uv.lock`,
+but that also hides the version. ty is pre-1.0 and its diagnostics move fast; unpinned, "ty clean" can flip
+between two runs on identical source. Bump the pin deliberately, don't drop it. `pytest` is the only dev
+dependency, and `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`. No formatter or linter is
+configured.
 
 The whole suite runs offline. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy
 key to assert on wiring only, so there is no reason to skip tests for cost or network.
