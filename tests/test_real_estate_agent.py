@@ -574,3 +574,27 @@ def test_ty_fails_the_build_on_warnings() -> None:
     """Adopted at zero warnings — the only cheap moment. Dropping it lets them
     accumulate with nothing reporting that the gate got weaker."""
     assert _pyproject()["tool"]["ty"]["terminal"]["error-on-warning"] is True
+
+
+def test_documented_test_count_matches_the_suite(request: pytest.FixtureRequest) -> None:
+    """The suite size is written into CLAUDE.md and README.md and drifts silently.
+
+    This one counts itself, which is the point: adding a test is exactly the
+    moment the documented number goes stale, so the check has to run then.
+
+    Skipped on a filtered run. `-k`, `-m`, and an explicit node id all collect a
+    subset — CLAUDE.md documents `-k "traversal"` as a normal invocation — and a
+    subset says nothing about the whole suite's size.
+    """
+    option = request.config.option
+    if option.keyword or option.markexpr:
+        pytest.skip("filtered with -k/-m; the count is only meaningful for the whole suite")
+    if any("::" in argument for argument in request.config.args):
+        pytest.skip("explicit node id collects a subset")
+
+    total = request.session.testscollected
+    for name in ("CLAUDE.md", "README.md"):
+        text = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+        assert f"{total} tests" in text, (
+            f"{name} does not say {total} tests, which is what the suite now collects"
+        )

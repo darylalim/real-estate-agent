@@ -23,7 +23,7 @@ uv run python main.py
 Checks — all three must pass. No API calls, no key required:
 
 ```bash
-uv run pytest tests/ -q       # 42 tests, ~0.7s
+uv run pytest tests/ -q       # 43 tests, ~0.7s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```

@@ -6,7 +6,9 @@ cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 
 [ -n "$(git status --porcelain -- '*.py' 2>/dev/null)" ] || exit 0
 
-# 1. The suite (3.14, the pinned interpreter).
+# 1. The suite (3.14, the pinned interpreter). This also enforces the documented
+#    test count -- test_documented_test_count_matches_the_suite lives in the
+#    suite rather than here, so it runs outside Claude Code too.
 if ! out=$(uv run --quiet pytest tests/ -q 2>&1); then
   printf 'Tests fail — the definition of done is "N tests, ty clean, ruff clean".\n\n%s\n' "$out" >&2
   exit 2
@@ -19,12 +21,4 @@ if ! floor=$(uv run --python 3.11 --isolated pytest tests/ -q 2>&1); then
   exit 2
 fi
 
-# 3. The suite size is written into CLAUDE.md and README.md and nothing checks
-#    it. A docs nit, not a broken build — warn the human, do not block.
-count=$(printf '%s' "$out" | grep -oE '[0-9]+ passed' | grep -oE '^[0-9]+')
-stale=""
-for doc in CLAUDE.md README.md; do
-  [ -z "$count" ] || grep -q "${count} tests" "$doc" 2>/dev/null || stale="${stale}${doc} "
-done
-[ -z "$stale" ] || jq -n --arg m "Suite is now ${count} tests; the count is stale in: ${stale}" '{systemMessage:$m}'
 exit 0

@@ -26,7 +26,7 @@ uv run python main.py                            # interactive
 uv run python main.py --require-approval         # pause before save_draft
 uv run python main.py --thread <id>              # continue a conversation
 
-uv run pytest tests/ -q                          # full suite: 42 tests, ~0.7s, no API calls
+uv run pytest tests/ -q                          # full suite: 43 tests, ~0.7s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -76,10 +76,15 @@ narrow `requires-python`, not to delete the leg.
 The whole suite runs offline. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy
 key to assert on wiring only, so there is no reason to skip tests for cost or network.
 
-The last four tests are of a different kind: they check the *toolchain config*, not the agent. They read the
+The last five tests are of a different kind: they check the *toolchain config*, not the agent. They read the
 live `pyproject.toml` and the pinned versions written in this file and `README.md`, and fail when those
 disagree — the ruff pin, `extend-select`, and `error-on-warning` are otherwise all silently droppable. Each
 was verified to fail on the drift it describes, not merely to pass today.
+
+`test_documented_test_count_matches_the_suite` is the odd one out: it counts itself, via
+`request.session.testscollected`, because adding a test is precisely when the number written above goes
+stale. It skips on `-k`, `-m`, or an explicit node id, since a filtered run collects a subset and says
+nothing about the whole suite — so the count is enforced by the full-suite runs and by nothing else.
 
 ## Architecture
 
