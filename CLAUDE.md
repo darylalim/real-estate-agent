@@ -12,6 +12,11 @@ silently.
 
 ## Commands
 
+**When working with Python, invoke the relevant Astral skill first**: `/astral:uv` for dependencies,
+environments, and running anything; `/astral:ty` for type checking; `/astral:ruff` for linting. Each carries
+that tool's current best practices, and the pins, rule set, and `ruff format` decision recorded below were all
+derived by following them — so a change made without loading the skill is likely to contradict something here.
+
 ```bash
 uv sync                                          # install (Python pinned to 3.14 by .python-version)
 cp .env.example .env                             # then add ANTHROPIC_API_KEY
@@ -31,13 +36,13 @@ uvx ruff@0.16.1 check .                          # lint — pinned; rule set in 
 
 **Definition of done in this repo is "N tests, ty clean, ruff clean"** — every commit message ends with it
 (commits before ruff was adopted end with the two-part form). All three are pinned so the phrase means the
-same thing on any machine: `.python-version` fixes the
-interpreter at 3.14 (`requires-python` alone only sets a floor, so a fresh `uv sync` elsewhere would pick
-whatever newest interpreter it found), and the `ty` and `ruff` versions are pinned **in the command** rather
-than in `pyproject.toml` — `uvx` runs each in its own ephemeral environment, so their dependencies never enter
-`uv.lock`, but that also hides the version. Both are pre-1.0 and their diagnostics move fast; unpinned,
-"clean" can flip between two runs on identical source. Bump a pin deliberately, don't drop it. `pytest` is the
-only dev dependency, and `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
+same thing on any machine: `.python-version` fixes the interpreter at 3.14 (`requires-python` alone only sets
+a floor, so a fresh `uv sync` elsewhere would pick whatever newest interpreter it found), and the `ty` and
+`ruff` versions are pinned **in the command** rather than in `pyproject.toml` — `uvx` runs each in its own
+ephemeral environment, so their dependencies never enter `uv.lock`, but that also hides the version. Both are
+pre-1.0 and their diagnostics move fast; unpinned, "clean" can flip between two runs on identical source. Bump
+a pin deliberately, don't drop it. `pytest` is the only dev dependency, and `.gitignore` already ignores
+`.ruff_cache/` and `.ty_cache/`.
 
 **`ruff check` yes, `ruff format` no.** The formatter would rewrite 7 of the 14 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
