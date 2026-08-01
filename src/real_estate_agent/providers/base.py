@@ -60,10 +60,13 @@ class ListingsProvider(Protocol):
         min_beds: int | None = None,
         min_baths: float | None = None,
         property_type: str | None = None,
-        status: str = "active",
+        status: str | None = "active",
         limit: int = 25,
     ) -> Sequence[Listing]:
-        """Return listings matching the filters, most relevant first."""
+        """Return listings matching the filters, most relevant first.
+
+        ``status`` defaults to active-only; pass ``None`` for any status.
+        """
         ...
 
     def get(self, listing_id: str) -> Listing | None:
@@ -77,6 +80,13 @@ class ListingsProvider(Protocol):
         radius_miles: float = 1.5,
         months_back: int = 6,
         limit: int = 8,
+        max_sqft_delta_pct: float | None = 0.30,
     ) -> Sequence[Listing]:
-        """Return recently sold properties suitable as comps for ``listing_id``."""
+        """Return recently sold properties suitable as comps for ``listing_id``.
+
+        ``max_sqft_delta_pct`` screens out candidates whose living area differs
+        from the subject by more than this fraction. The CMA methodology
+        discards such comps anyway, so returning them only wastes the analyst's
+        tokens. Pass ``None`` to disable the screen.
+        """
         ...

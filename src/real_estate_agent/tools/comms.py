@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from email.message import EmailMessage
+from urllib.parse import quote, urlencode
 
 from langchain.tools import tool
 from langchain_core.tools import BaseTool
@@ -19,6 +21,9 @@ from real_estate_agent.config import DRAFTS_DIR
 from real_estate_agent.providers.base import ListingsProvider
 
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+# Outlook truncates mailto: around 2 KB; stay clear of the edge.
+_MAILTO_MAX_CHARS = 1800
 
 
 def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
@@ -122,33 +127,81 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
         )
 
     @tool
-    def save_draft(filename: str, subject: str, body: str) -> str:
-        """Save a client-facing email or message draft to the drafts directory.
+    def save_draft(filename: str, subject: str, body: str, to: str = "") -> str:
+        """Save a client-facing draft and produce a one-click send handoff.
 
-        This writes a file for a human to review and send. It does not send
-        anything. Use it as the final step of any outreach or follow-up task.
+        This is the ONLY correct way to produce a draft — do not also write the
+        message with `write_file`, or the reviewer gets two divergent copies of
+        the same email and has to guess which is current.
+
+        Writes three things and sends nothing:
+          - a .md file, the readable canonical copy
+          - a .eml file that opens in the reviewer's mail client as an
+            editable unsent message
+          - a mailto: URL in the return value, which opens a prefilled compose
+            window in one click (omitted when the body is too long for a URL)
+
+        A human still reads the text and presses send. Say so when you report
+        back, and never imply a message went out.
 
         Args:
-            filename: Base name for the draft, e.g. "follow-up-jane-doe". A
-                .md extension and timestamp are added automatically.
+            filename: Base name, e.g. "follow-up-jane-doe". Extension and
+                timestamp are added automatically.
             subject: Subject line.
-            body: Full message body in Markdown.
+            body: Full message body. Plain prose, not Markdown scaffolding —
+                it goes straight into an email.
+            to: Recipient address. Optional; leave empty if unknown and the
+                reviewer will fill it in.
         """
         DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
         stem = _SAFE_FILENAME.sub("-", filename).strip("-.") or "draft"
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        path = DRAFTS_DIR / f"{stem}-{stamp}.md"
 
-        path.write_text(
-            f"# {subject}\n\n_Draft saved {stamp} — review before sending._\n\n{body}\n",
+        md_path = DRAFTS_DIR / f"{stem}-{stamp}.md"
+        eml_path = DRAFTS_DIR / f"{stem}-{stamp}.eml"
+
+        # mailto: is the genuine one-click path, but clients cap URL length
+        # (Outlook truncates around 2 KB). Offer it only when it will survive.
+        query = urlencode({"subject": subject, "body": body}, quote_via=quote)
+        mailto = f"mailto:{quote(to)}?{query}"
+        mailto_usable = len(mailto) <= _MAILTO_MAX_CHARS
+
+        md_path.write_text(
+            f"# {subject}\n\n"
+            f"**To:** {to or '_(fill in)_'}  \n"
+            f"**Drafted:** {stamp}  \n"
+            f"**Status:** not sent — review, then send\n\n"
+            f"Open `{eml_path.name}` in your mail client to edit and send.\n\n"
+            f"---\n\n{body}\n",
             encoding="utf-8",
         )
+
+        # X-Unsent: 1 is the convention that makes a mail client open this as a
+        # composable draft rather than a received message. No From and no Date:
+        # the client fills those, and their absence keeps it clearly unsent.
+        message = EmailMessage()
+        if to:
+            message["To"] = to
+        message["Subject"] = subject
+        message["X-Unsent"] = "1"
+        message.set_content(body)
+        eml_path.write_bytes(message.as_bytes())
+
         return json.dumps(
             {
-                "saved": True,
-                "path": str(path),
+                "sent": False,
+                "note": "Nothing was sent. A human must review and send.",
+                "markdown_path": str(md_path),
+                "eml_path": str(eml_path),
+                "open_command": f"open {eml_path}",
+                "mailto_url": mailto if mailto_usable else None,
+                "mailto_omitted_reason": (
+                    None
+                    if mailto_usable
+                    else f"body too long for a mailto: URL ({len(mailto)} chars); use the .eml"
+                ),
+                "to": to or None,
                 "subject": subject,
-                "note": "Draft written to disk. Nothing was sent.",
             },
             indent=2,
         )

@@ -55,28 +55,57 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
         radius_miles: float = 1.5,
         months_back: int = 6,
         limit: int = 8,
+        max_sqft_delta_pct: float = 0.30,
     ) -> str:
         """Find recently sold comparables for a subject property, as JSON.
 
-        Returns the comp set plus aggregate statistics and an indicated value
-        range derived from comp price-per-sqft applied to the subject's size.
-        This is the primary input to a CMA.
+        Returns the comp set, aggregate statistics, an indicated value range
+        derived from comp price-per-sqft applied to the subject's size, and a
+        breakdown of how many candidates were screened out and why. This is the
+        primary input to a CMA.
+
+        Candidates whose living area differs from the subject by more than
+        `max_sqft_delta_pct` are excluded before ranking, because the CMA
+        methodology discards them anyway. If `screened_out.size_mismatch` is
+        high and `comps_found` is low, the subject is an outlier for its market
+        — say so rather than stretching the remaining comps.
 
         Args:
             listing_id: Subject property id, e.g. "MLS-1022".
             radius_miles: Search radius around the subject property.
             months_back: Only include sales closed within this many months.
             limit: Maximum number of comparables to return.
+            max_sqft_delta_pct: Size screen as a fraction, e.g. 0.30 for ±30%.
+                Widen deliberately if the comp set is too thin, and report it.
         """
-        subject = provider.get(listing_id)
+        diagnostics_fn = getattr(provider, "comparables_with_diagnostics", None)
+        if diagnostics_fn is not None:
+            subject, comps_seq, rejected = diagnostics_fn(
+                listing_id,
+                radius_miles=radius_miles,
+                months_back=months_back,
+                limit=limit,
+                max_sqft_delta_pct=max_sqft_delta_pct,
+            )
+            comps = list(comps_seq)
+        else:
+            # Providers that only implement the protocol still work; they just
+            # cannot report what they screened out.
+            subject = provider.get(listing_id)
+            comps = list(
+                provider.comparables(
+                    listing_id,
+                    radius_miles=radius_miles,
+                    months_back=months_back,
+                    limit=limit,
+                    max_sqft_delta_pct=max_sqft_delta_pct,
+                )
+            )
+            rejected = {}
+
         if subject is None:
             return json.dumps({"error": f"No listing found with id {listing_id!r}."})
 
-        comps = list(
-            provider.comparables(
-                listing_id, radius_miles=radius_miles, months_back=months_back, limit=limit
-            )
-        )
         stats = _summarize_prices(comps)
 
         indicated_value = None
@@ -95,8 +124,10 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                 "search": {
                     "radius_miles": radius_miles,
                     "months_back": months_back,
+                    "max_sqft_delta_pct": max_sqft_delta_pct,
                     "comps_found": len(comps),
                 },
+                "screened_out": rejected,
                 "comp_statistics": stats,
                 "indicated_value_range": indicated_value,
                 "comparables": [listing.as_dict() for listing in comps],

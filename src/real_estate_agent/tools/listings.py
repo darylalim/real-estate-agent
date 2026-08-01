@@ -34,6 +34,10 @@ def make_listing_tools(provider: ListingsProvider) -> list[BaseTool]:
         Use this to build or narrow a buyer shortlist. Every filter is optional;
         omit a filter to leave that dimension unconstrained.
 
+        Each match is returned as a complete listing record — every field
+        `get_listing` would give you, including price_per_sqft. Do not re-fetch
+        these results individually.
+
         Args:
             city: City name, e.g. "Austin".
             state: Two-letter state code, e.g. "TX".

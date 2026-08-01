@@ -86,10 +86,15 @@ declares it explicitly in `subagents.py`.
   only under `/workspace/`, `.env` and `.git` are denied for read and write, and
   everything else is read-only. Rules are evaluated **in order, first match
   wins** — the allows must precede the catch-all deny.
-- **No send capability.** `save_draft` writes to `workspace/drafts/` and stops.
-  A human reviews and sends. If you add real delivery, gate it:
-  `build_agent(require_approval=True)` pauses on `save_draft` for approval
-  (needs the checkpointer, which is on by default).
+- **No send capability, by design.** The agent cannot send email. `save_draft`
+  writes three artifacts and stops:
+  a `.md` (readable canonical copy), a `.eml` carrying `X-Unsent: 1` so a mail
+  client opens it as an editable draft, and a `mailto:` URL in the return value
+  for one-click compose (omitted above ~1800 chars, where clients truncate).
+  A human still reads the text and presses send — which keeps accountability
+  with the licensed person, where fair-housing and agency law put it.
+  If you later add real delivery, gate it: `build_agent(require_approval=True)`
+  pauses `save_draft` for approval (the checkpointer is on by default).
 - **Path traversal.** Document filenames come from model output, so they are
   resolved and confined to the documents directory before any read.
 - **No shell.** The `execute` tool appears in the tool list but errors out —
@@ -108,6 +113,31 @@ it to recommend an attorney, appraiser, or lender rather than substitute for one
 | `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` / `LANGSMITH_PROJECT` | — | Recommended. Current names; `LANGCHAIN_*` no longer works. |
 | `REA_MODEL` | `anthropic:claude-opus-5` | Orchestrator. LangChain needs the `provider:model` prefix. |
 | `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
+
+## Verified behaviour
+
+Run live against `anthropic:claude-opus-5`, traces in LangSmith:
+
+| Check | Result |
+|---|---|
+| Orchestrator delegates rather than answering directly | `task` at root; 6/6 correct matches |
+| Subagents load their skills | ±20% size screen and 25% adjustment-drop threshold applied — both exist only in `SKILL.md` |
+| Planning and cross-specialist handoff | 3× `write_todos`, 2 delegations, liaison read the analyst's CMA file |
+| Write containment | `permission denied` on `/src/notes.md`; nothing written outside `workspace/` |
+| Fair-housing guardrail | Refused "family-friendly", "young professionals", "safe neighborhood", "good schools" with the legal basis for each, and supplied compliant copy |
+
+Three defects the run exposed, since fixed:
+
+- `comparables()` ranked by similarity but never **rejected** on size, handing
+  back comps the CMA methodology discards anyway. It now applies a size screen
+  and reports what it filtered, so a thin comp set is distinguishable from a
+  thin market.
+- The mock spread square footage too widely for a 66-listing dataset, so small
+  properties had no size-matched comps and no CMA was possible. Sizes now
+  cluster; 32 of 40 active listings clear the 3-comp minimum, and a couple of
+  genuine outliers remain so the insufficient-comps path stays reachable.
+- client-liaison had two ways to write a draft and used both, producing
+  divergent copies. `save_draft` is now the only sanctioned path.
 
 ## Notes on deepagents 0.7.1
 

@@ -43,7 +43,10 @@ def _build_dataset() -> list[Listing]:
             property_type = rng.choice(_PROPERTY_TYPES)
             beds = rng.choice([2, 3, 3, 4, 4, 5])
             baths = rng.choice([1.5, 2.0, 2.0, 2.5, 3.0, 3.5])
-            sqft = int(rng.gauss(400 * beds + 600, 260))
+            # Tight sigma on purpose: real markets cluster by size, and a wide
+            # spread over a small dataset leaves every subject without a
+            # size-matched comp, so no CMA is ever possible.
+            sqft = int(rng.gauss(380 * beds + 520, 130))
             sqft = max(720, min(sqft, 4200))
             year_built = rng.choice([1958, 1972, 1985, 1998, 2006, 2015, 2021])
 
@@ -57,9 +60,10 @@ def _build_dataset() -> list[Listing]:
                 ppsf *= 0.9
             price = int(round(sqft * ppsf, -3))
 
-            # Roughly a third of inventory is recent sold comps.
+            # Just under half of inventory is recent sold comps, so CMAs have
+            # something to work with at the default 6-month window.
             roll = rng.random()
-            if roll < 0.38:
+            if roll < 0.45:
                 status = "sold"
                 days_back = rng.randint(5, 330)
                 sold_date = today - timedelta(days=days_back)
@@ -138,7 +142,7 @@ class MockListingsProvider:
         min_beds: int | None = None,
         min_baths: float | None = None,
         property_type: str | None = None,
-        status: str = "active",
+        status: str | None = "active",
         limit: int = 25,
     ) -> Sequence[Listing]:
         results = [
@@ -167,34 +171,70 @@ class MockListingsProvider:
         radius_miles: float = 1.5,
         months_back: int = 6,
         limit: int = 8,
+        max_sqft_delta_pct: float | None = 0.30,
     ) -> Sequence[Listing]:
+        _subject, comps, _rejected = self.comparables_with_diagnostics(
+            listing_id,
+            radius_miles=radius_miles,
+            months_back=months_back,
+            limit=limit,
+            max_sqft_delta_pct=max_sqft_delta_pct,
+        )
+        return comps
+
+    def comparables_with_diagnostics(
+        self,
+        listing_id: str,
+        *,
+        radius_miles: float = 1.5,
+        months_back: int = 6,
+        limit: int = 8,
+        max_sqft_delta_pct: float | None = 0.30,
+    ) -> tuple[Listing | None, list[Listing], dict[str, int]]:
+        """Comps plus a count of what was screened out, and why.
+
+        Silent screening is worse than no screening: an analyst that cannot see
+        it rejected nine candidates on size has no way to tell a thin comp set
+        from a thin market.
+        """
         subject = self._by_id.get(listing_id)
         if subject is None:
-            return []
+            return None, [], {}
 
         cutoff = self._today - timedelta(days=int(months_back * 30.44))
+        rejected = {"not_sold_or_stale": 0, "outside_radius": 0, "size_mismatch": 0}
         scored: list[tuple[float, Listing]] = []
 
         for candidate in self._listings:
             if candidate.listing_id == subject.listing_id:
                 continue
             if candidate.status != "sold" or candidate.sold_date is None:
+                rejected["not_sold_or_stale"] += 1
                 continue
             if date.fromisoformat(candidate.sold_date) < cutoff:
+                rejected["not_sold_or_stale"] += 1
                 continue
 
             distance = _miles_between(
                 subject.latitude, subject.longitude, candidate.latitude, candidate.longitude
             )
             if distance > radius_miles:
+                rejected["outside_radius"] += 1
                 continue
 
-            # Rank on similarity: distance, size delta, bed delta, age delta.
             sqft_delta = abs(candidate.sqft - subject.sqft) / max(subject.sqft, 1)
+
+            # Hard size screen. Without it the ranking happily returns a comp
+            # 175% larger than the subject — which the CMA methodology then
+            # discards anyway, after the analyst has spent tokens adjusting it.
+            if max_sqft_delta_pct is not None and sqft_delta > max_sqft_delta_pct:
+                rejected["size_mismatch"] += 1
+                continue
+
             bed_delta = abs(candidate.beds - subject.beds)
             age_delta = abs(candidate.year_built - subject.year_built) / 100
             score = distance + (sqft_delta * 2) + (bed_delta * 0.35) + age_delta
             scored.append((score, candidate))
 
         scored.sort(key=lambda pair: pair[0])
-        return [listing for _, listing in scored[:limit]]
+        return subject, [listing for _, listing in scored[:limit]], rejected
