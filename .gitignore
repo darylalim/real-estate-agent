@@ -6,6 +6,11 @@ __pycache__/
 .ruff_cache/
 .ty_cache/
 
+# `.streamlit/config.toml` is the theme and *is* committed. Secrets are the
+# other file that directory attracts, and this app has none — credentials come
+# from `.env`. Listed anyway so adding one later cannot commit it by reflex.
+.streamlit/secrets.toml
+
 # Agent scratch space. Mostly regenerated per run, but checkpoints.db holds
 # durable conversation state — deleting it discards every thread `--thread`
 # could resume.

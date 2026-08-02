@@ -1,0 +1,152 @@
+# Theme for the Streamlit app (`uv run streamlit run streamlit_app.py`).
+#
+# Derived from the skill's `financial-dashboard` template, with one deliberate
+# change: that template — like all twelve bundled ones — ships a single
+# `[theme]` block, and a custom theme with only `[theme]` **locks the app to one
+# mode**. The mode switch in the settings menu appears only when both
+# `[theme.light]` and `[theme.dark]` are defined. Locking a tool a licensed
+# agent uses at a desk and in a client's driveway to permanent dark is a
+# regression the template does not intend, so the light half is authored here
+# from the same slate/blue family.
+#
+# Shared shape and typography live in `[theme]`; each mode overrides only colour.
+# Everything here is native config — no CSS. See `CLAUDE.md` for why the app
+# avoids Altair, which is the other half of "style it without fighting ty".
+
+[theme]
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+baseFontWeight = 400
+codeFontSize = "13px"
+headingFontSizes = ["28px", "22px", "18px", "16px", "14px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+
+# Subtle rounding and visible borders: the page leans on `st.container(border=True)`
+# to group the metric row and each chart panel, so the border is load-bearing.
+baseRadius = "6px"
+buttonRadius = "6px"
+showWidgetBorder = true
+showSidebarBorder = true
+linkUnderline = false
+
+# --- light --------------------------------------------------------------------
+
+[theme.light]
+primaryColor = "#2563EB"             # Blue 600 — 5.2:1 against the white button text
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F5F9" # Slate 100
+codeBackgroundColor = "#F1F5F9"
+textColor = "#0F172A"                # Slate 900
+codeTextColor = "#334155"            # Slate 700
+linkColor = "#2563EB"
+borderColor = "#CBD5E1"              # Slate 300
+
+# Semantic colours. `st.metric` draws its delta arrow in green/red, and the
+# market page reads asking-vs-achieved as exactly that signal — these need to
+# carry meaning at a glance, not merely pass contrast.
+greenColor = "#059669"
+redColor = "#DC2626"
+yellowColor = "#CA8A04"
+orangeColor = "#EA580C"
+blueColor = "#2563EB"
+violetColor = "#7C3AED"
+grayColor = "#475569"
+
+# Ordered so the scatter's `color="property_type"` series stay distinguishable
+# for a viewer who cannot separate red from green.
+chartCategoricalColors = [
+    "#2563EB",
+    "#059669",
+    "#7C3AED",
+    "#DC2626",
+    "#CA8A04",
+    "#0891B2",
+    "#475569",
+    "#EA580C",
+]
+
+# Low to high. Light mode runs pale to saturated — the inverse of the dark half.
+chartSequentialColors = [
+    "#F0F9FF",
+    "#E0F2FE",
+    "#BAE6FD",
+    "#7DD3FC",
+    "#38BDF8",
+    "#0EA5E9",
+    "#0284C7",
+    "#0369A1",
+    "#075985",
+    "#0C4A6E",
+]
+
+dataframeBorderColor = "#CBD5E1"
+dataframeHeaderBackgroundColor = "#F1F5F9"
+
+[theme.light.sidebar]
+backgroundColor = "#F8FAFC"          # Slate 50 — a shade off the main column
+secondaryBackgroundColor = "#F1F5F9"
+codeBackgroundColor = "#E2E8F0"
+textColor = "#0F172A"
+borderColor = "#CBD5E1"
+primaryColor = "#2563EB"
+dataframeHeaderBackgroundColor = "#E2E8F0"
+dataframeBorderColor = "#CBD5E1"
+
+# --- dark ---------------------------------------------------------------------
+
+[theme.dark]
+primaryColor = "#60A5FA"             # Blue 400 — the light half's hue, lifted for dark
+backgroundColor = "#0F172A"          # Slate 900
+secondaryBackgroundColor = "#1E293B" # Slate 800
+codeBackgroundColor = "#1E293B"
+textColor = "#F1F5F9"
+codeTextColor = "#CBD5E1"
+linkColor = "#60A5FA"
+borderColor = "#334155"              # Slate 700
+
+greenColor = "#34D399"
+redColor = "#F87171"
+yellowColor = "#FBBF24"
+orangeColor = "#FB923C"
+blueColor = "#60A5FA"
+violetColor = "#A78BFA"
+grayColor = "#94A3B8"
+
+chartCategoricalColors = [
+    "#60A5FA",
+    "#34D399",
+    "#A78BFA",
+    "#F87171",
+    "#FBBF24",
+    "#38BDF8",
+    "#94A3B8",
+    "#FB923C",
+]
+
+chartSequentialColors = [
+    "#0C4A6E",
+    "#075985",
+    "#0369A1",
+    "#0284C7",
+    "#0EA5E9",
+    "#38BDF8",
+    "#7DD3FC",
+    "#BAE6FD",
+    "#E0F2FE",
+    "#F0F9FF",
+]
+
+dataframeBorderColor = "#334155"
+dataframeHeaderBackgroundColor = "#1E293B"
+
+[theme.dark.sidebar]
+backgroundColor = "#0B1220"          # A shade under the main column, same as light
+secondaryBackgroundColor = "#1E293B"
+codeBackgroundColor = "#1E293B"
+textColor = "#F1F5F9"
+borderColor = "#334155"
+primaryColor = "#60A5FA"
+dataframeHeaderBackgroundColor = "#1E293B"
+dataframeBorderColor = "#334155"

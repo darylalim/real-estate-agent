@@ -49,6 +49,12 @@ Two pages over the same project:
   agent's own `market_statistics` tool rather than a second implementation, so
   the dashboard cannot quietly disagree with what the analyst was told.
 
+Both pages are themed from `.streamlit/config.toml` — native config, no CSS —
+and the theme defines light *and* dark, so the mode switch in the settings menu
+keeps working. Browsing a workspace artifact in the chat sidebar is an
+`st.fragment`, so picking a file does not re-read the checkpoint or re-render
+the conversation.
+
 Checks — all three must pass. No API calls, no key required:
 
 ```bash
@@ -58,7 +64,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 63 tests, ~0.9s
+uv run pytest tests/ -q       # 66 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -110,6 +116,7 @@ already given.
 | `skills/` | Progressive-disclosure methodology, loaded on demand |
 | `workspace/` | Agent scratch space (gitignored) |
 | `streamlit_app.py`, `app_pages/`, `ui/` | The web UI — a consumer of the package, like `main.py` |
+| `.streamlit/config.toml` | Theme, in both light and dark. No CSS anywhere in the app |
 
 ## Plugging in real listings data
 

@@ -8,6 +8,7 @@ loudly at construction.
 
 from __future__ import annotations
 
+import ast
 import email
 import email.policy
 import json
@@ -843,6 +844,98 @@ def test_the_app_and_the_cli_flatten_interrupts_identically() -> None:
     agent = type("_Agent", (), {"get_state": lambda _self, _config: state})()
 
     assert pending_actions(agent, {}) == main._action_requests(interrupts)
+
+
+def test_the_workspace_browser_is_a_fragment() -> None:
+    """Browsing an artifact must not re-read the checkpoint.
+
+    The file selectbox and the preview expander are pure viewers — nothing they
+    do changes what the conversation is. But a widget outside a fragment reruns
+    the *whole script*, and this script's dominant cost is `thread_snapshot`,
+    which takes the checkpointer's lock and deserialises every message in the
+    thread before re-rendering the transcript. Paying that to answer "what is in
+    this file" gets worse with every turn, which is exactly the shape of cost
+    that never looks broken.
+
+    Asserted on source because the alternative is a live Streamlit runtime. The
+    ordering half matters too: the fragment writes into `st.sidebar`, and
+    Streamlit only lets it redraw there if that container was already written to
+    during the full run.
+    """
+    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
+    assert "@st.fragment" in source, (
+        "the workspace browser must be a fragment, or every file click re-reads "
+        "the whole checkpoint"
+    )
+    # The indent distinguishes the call from `def _workspace_browser()`, which
+    # necessarily comes first and would otherwise satisfy this on its own.
+    assert source.index("with st.sidebar:") < source.index("\n    _workspace_browser()"), (
+        "the sidebar must receive a write before the fragment renders into it"
+    )
+
+
+def _market_page_constant(name: str) -> Any:
+    """Read one literal constant out of `market.py` without running the page."""
+    source = (PROJECT_ROOT / "app_pages" / "market.py").read_text(encoding="utf-8")
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} is not a module-level constant in market.py")
+
+
+def test_the_listings_table_drops_columns_rather_than_masking_them() -> None:
+    """`column_config={name: None}` hides a column; it does not withhold it.
+
+    The values are still serialised into the page payload, so a `description`
+    nobody can see still ships on every row of every filter combination. Here
+    that is payload rather than disclosure — the mock has no secrets — but the
+    same two lines over a real feed are the difference, and the fix costs one
+    `.drop`.
+
+    The second half guards the fix itself: `drop(columns=...)` raises `KeyError`
+    on a name that is not there, so renaming a `Listing` field would take the
+    page down rather than degrade. Checked against a real frame.
+    """
+    from ui.market_data import listings_frame
+
+    dropped = _market_page_constant("_NOT_IN_THE_TABLE")
+    source = (PROJECT_ROOT / "app_pages" / "market.py").read_text(encoding="utf-8")
+    assert "frame.drop(columns=_NOT_IN_THE_TABLE)" in source, (
+        "the table must be given a frame without these columns, not a config that hides them"
+    )
+    for name in dropped:
+        assert f'"{name}": None' not in source, (
+            f"{name} is dropped and also masked in column_config — one of the two is stale"
+        )
+
+    frame = listings_frame("Round Rock", "TX", None, "active")
+    assert not frame.empty, "fixture market went empty; the column check below proves nothing"
+    missing = [name for name in dropped if name not in frame.columns]
+    assert not missing, f"_NOT_IN_THE_TABLE names columns that do not exist: {missing}"
+
+
+def test_the_theme_leaves_the_light_dark_switch_working() -> None:
+    """A custom theme with only `[theme]` locks the app to a single mode.
+
+    Streamlit shows the light/dark control in the settings menu only when both
+    `[theme.light]` and `[theme.dark]` are defined — every bundled theme
+    template ships one `[theme]` block and therefore takes that switch away
+    without saying so. This app is used at a desk and in daylight, so both
+    halves are authored. Nothing raises if one is deleted; the toggle just
+    disappears.
+    """
+    config = tomllib.loads(
+        (PROJECT_ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+    )
+    theme = config["theme"]
+    for mode in ("light", "dark"):
+        assert mode in theme, f"[theme.{mode}] is missing — the mode switch will not render"
+        assert theme[mode].get("primaryColor"), f"[theme.{mode}] defines no primaryColor"
+    assert theme["light"]["backgroundColor"] != theme["dark"]["backgroundColor"], (
+        "the two modes must actually differ"
+    )
 
 
 # --- toolchain configuration ----------------------------------------------

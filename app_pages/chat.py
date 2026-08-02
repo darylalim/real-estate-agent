@@ -43,6 +43,56 @@ SUGGESTIONS = {
     ),
 }
 
+@st.fragment
+def _workspace_browser() -> None:
+    """The sidebar's artifact list, isolated from the rest of the page.
+
+    A fragment because everything in here is a *viewer*: picking a different
+    file or opening the preview changes nothing the conversation depends on.
+    Without one, each of those clicks reruns the whole script — and that means
+    `thread_snapshot`, which takes the checkpointer's lock and deserialises
+    every message in the thread, plus a re-render of the entire transcript. On a
+    long conversation that is the dominant cost of the page, paid to answer a
+    question about a file.
+
+    A turn still refreshes this. The rerun at the foot of the page is
+    app-scoped, and a full app run reruns fragments too — so the invariant that
+    the sidebar never lags a turn behind is unaffected. (Written as prose rather
+    than as the call itself on purpose: the toggle-ordering test compares source
+    positions, and a literal here would read as a rerun above the toggle.)
+    """
+    artifacts = workspace_artifacts()
+    if not artifacts:
+        st.caption("Nothing written yet. Specialists write here as they work.")
+        return
+
+    # Already relative to the workspace root, and handed straight back to
+    # `read_workspace_file` — the page never does path arithmetic of its own.
+    names = [str(path) for path in artifacts]
+    chosen = st.selectbox("File", names, key="artifact", label_visibility="collapsed")
+    try:
+        payload, truncated = read_workspace_file(chosen)
+    except (OSError, ValueError) as exc:
+        st.caption(f"Could not read it: {exc}")
+        return
+
+    if truncated:
+        st.caption(
+            "Too large to serve inline — the whole file is on disk at "
+            f"`{workspace_path(chosen)}`."
+        )
+    else:
+        st.download_button(
+            "Download",
+            payload,
+            file_name=Path(chosen).name,
+            icon=":material/download:",
+            width="stretch",
+        )
+    with st.expander("Preview", icon=":material/description:"):
+        st.code(payload.decode("utf-8", errors="replace"), language="markdown")
+
+
 st.title("Chat")
 st.caption(
     "The orchestrator holds no domain tools — it plans, delegates to the four "
@@ -106,36 +156,9 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Workspace")
-    artifacts = workspace_artifacts()
-    if not artifacts:
-        st.caption("Nothing written yet. Specialists write here as they work.")
-    else:
-        # Already relative to the workspace root, and handed straight back to
-        # `read_workspace_file` — the page never does path arithmetic of its own.
-        names = [str(path) for path in artifacts]
-        chosen = st.selectbox(
-            "File", names, key="artifact", label_visibility="collapsed"
-        )
-        try:
-            payload, truncated = read_workspace_file(chosen)
-        except (OSError, ValueError) as exc:
-            st.caption(f"Could not read it: {exc}")
-        else:
-            if truncated:
-                st.caption(
-                    "Too large to serve inline — the whole file is on disk at "
-                    f"`{workspace_path(chosen)}`."
-                )
-            else:
-                st.download_button(
-                    "Download",
-                    payload,
-                    file_name=Path(chosen).name,
-                    icon=":material/download:",
-                    width="stretch",
-                )
-            with st.expander("Preview", icon=":material/description:"):
-                st.code(payload.decode("utf-8", errors="replace"), language="markdown")
+    # The sidebar has already been written to by everything above, which is what
+    # lets a fragment render into it and redraw in place on its own reruns.
+    _workspace_browser()
 
     st.divider()
     st.caption(f"Orchestrator · `{DEFAULT_MODEL}`")

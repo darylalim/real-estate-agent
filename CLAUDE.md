@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 63 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 66 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -205,7 +205,8 @@ property-search workflow is not.
 
 ### The Streamlit app
 
-`streamlit_app.py` (a two-page `st.navigation`), `app_pages/chat.py`, `app_pages/market.py`, and `ui/`.
+`streamlit_app.py` (a two-page `st.navigation`), `app_pages/chat.py`, `app_pages/market.py`, `ui/`, and
+`.streamlit/config.toml`.
 
 **All four live outside `src/real_estate_agent/`, deliberately.** The package exposes `build_agent` through a
 lazy `__getattr__` so importing a provider does not drag in LangChain; putting Streamlit imports inside it
@@ -236,6 +237,25 @@ Three things that are not obvious:
   tests use them; the page itself takes the snapshot.
 - **`market.py` imports its thresholds from `tools/market.py`.** The seller/balanced/buyer badge and the
   `interpretation_hint` printed at the foot of the same page would otherwise be two copies of 4 and 6.
+- **The sidebar's workspace browser is an `@st.fragment`.** Its selectbox and preview expander are pure
+  viewers, but a widget outside a fragment reruns the whole script — which on this page means
+  `thread_snapshot` (the checkpointer's lock, plus deserialising every message) and a full transcript
+  re-render, to answer a question about a file. A fragment confines that to itself. Two constraints come
+  with it: the fragment must be *called* after the sidebar has already been written to, or Streamlit has no
+  container to redraw into; and its docstring must not contain the literal `st.rerun()`, because
+  `test_the_approval_toggle_renders_before_anything_that_can_rerun` compares source positions and the
+  fragment is defined above the toggle. The turn-end rerun is app-scoped and reruns fragments too, so the
+  "a turn always re-runs the page" invariant above still holds.
+- **Theming is `.streamlit/config.toml`, and it defines *both* modes.** The skill's twelve bundled theme
+  templates each ship a single `[theme]` block, and a custom theme with only `[theme]` removes the
+  light/dark switch from the settings menu — silently, with nothing raising. The config here keeps shared
+  typography and shape in `[theme]` and puts colour in `[theme.light]` / `[theme.dark]` (plus their
+  `.sidebar` sub-tables), so the switch survives. No CSS anywhere; `st.markdown(unsafe_allow_html=True)`
+  and `st.html` are not how this app is styled.
+- **`market.py` drops columns before `st.dataframe`, rather than hiding them with `column_config`.**
+  `{name: None}` hides a column in the browser and still serialises every value into the payload. Note the
+  trade: `frame.drop(columns=...)` raises `KeyError` on a name that is not there, so `_NOT_IN_THE_TABLE` is
+  checked against a real frame by `test_the_listings_table_drops_columns_rather_than_masking_them`.
 
 ## Invariants that fail silently
 

@@ -26,6 +26,13 @@ _STATUS_CHOICES = {"Active": "active", "Sold": "sold", "Pending": "pending", "Al
 # treats a ty warning as a failure.
 _PRICE_BAND = 50_000
 
+# Dropped before display, not hidden with `column_config={name: None}`. That
+# only hides a column in the browser — every value is still serialised into the
+# page payload, so a listing `description` nobody can see still ships on every
+# row. Latitude and longitude are already on the map above, and
+# `effective_price` is a chart intermediate that duplicates `price`/`sold_price`.
+_NOT_IN_THE_TABLE = ["latitude", "longitude", "description", "effective_price"]
+
 st.title("Market")
 st.caption(
     "Supply, pricing and absorption straight from the listings provider — the "
@@ -177,7 +184,7 @@ with st.container(border=True):
 with st.container(border=True):
     st.subheader(f"{len(frame)} listings")
     st.dataframe(
-        frame,
+        frame.drop(columns=_NOT_IN_THE_TABLE),
         hide_index=True,
         column_config={
             "listing_id": st.column_config.TextColumn("ID", pinned=True),
@@ -191,13 +198,6 @@ with st.container(border=True):
             "sold_date": st.column_config.DatetimeColumn("Sold on", format="MMM DD, YYYY"),
             "hoa_monthly": st.column_config.NumberColumn("HOA", format="dollar", step=1),
             "year_built": st.column_config.NumberColumn("Built", format="%d"),
-            # Rendered on the map above; noise in the table.
-            "latitude": None,
-            "longitude": None,
-            "description": None,
-            # Derived for the charts; `price` and `sold_price` are both already
-            # columns here, so showing it too would just be a third of the same.
-            "effective_price": None,
         },
     )
 
