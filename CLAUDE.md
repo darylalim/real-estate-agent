@@ -26,10 +26,12 @@ uv run python main.py                            # interactive
 uv run python main.py --require-approval         # pause before save_draft
 uv run python main.py --thread <id>              # continue a conversation (persisted to workspace/)
 
+uv run streamlit run streamlit_app.py            # the same agent in a browser, plus a market dashboard
+
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 55 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 59 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -201,6 +203,29 @@ orchestrator** — each subagent declares its own in `subagents.py`, pinned by `
 The criterion is size: CMA adjustment grids and clause checklists are too big for a system prompt; a
 property-search workflow is not.
 
+### The Streamlit app
+
+`streamlit_app.py` (a two-page `st.navigation`), `app_pages/chat.py`, `app_pages/market.py`, and `ui/`.
+
+**All four live outside `src/real_estate_agent/`, deliberately.** The package exposes `build_agent` through a
+lazy `__getattr__` so importing a provider does not drag in LangChain; putting Streamlit imports inside it
+would undo that for every consumer, the CLI included. The app is a consumer of the package exactly as
+`main.py` is — which also means `pythonpath = ["."]` is what lets `tests/` reach `ui/`, the same line that
+already lets it reach `main.py`.
+
+Three things that are not obvious:
+
+- **The checkpointer is built differently here.** `main.py` uses
+  `with SqliteSaver.from_conn_string(...)`, which closes the connection on exit. A Streamlit script reruns top
+  to bottom on every interaction, so that shape cannot survive; `ui/agent_session.get_agent` holds a
+  `sqlite3.connect(..., check_same_thread=False)` under `@st.cache_resource` instead. Same flag
+  `from_conn_string` sets internally, same `ensure_workspace()`-before-connect ordering, same reason.
+- **`get_agent` is keyed on `require_approval`.** That flag decides whether the `save_draft` interrupt is in
+  the middleware stack at all, so toggling it has to yield a different graph rather than the cached one.
+- **No Altair.** Its fluent builder (`alt.Chart(...).mark_bar().encode(...)`) is opaque to ty, which reports
+  `unresolved-attribute` on `.encode` — and `error-on-warning = true` makes that a failure. `market.py`
+  pre-bins prices in plain Python and uses `st.bar_chart`. Reach for a native chart before an ignore comment.
+
 ## Invariants that fail silently
 
 Each of these is load-bearing and has a test. Breaking one produces plausible-looking wrong output, not an error.
@@ -249,6 +274,19 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   stay module globals resolved at call time — rebinding them into defaults or a local alias breaks the patching.
 - **`save_draft` is the only sanctioned way to produce a draft.** Adding a second path (e.g. `write_file`) was a
   real defect: the reviewer got two divergent copies of one email.
+- **`ui.agent_session.message_key` and `main._message_key` must stay identical.** Both dedupe a
+  `stream_mode="values"` stream, and both read the same checkpoint database — so a thread started in the CLI
+  and reopened in the browser reprints its entire history if they drift.
+  `test_streamlit_keys_messages_exactly_as_the_cli_does` pins the pair, not either one alone.
+- **The web workspace browser must never list `CHECKPOINT_DB`.** The sidebar wires each file it finds to a
+  download button, and the checkpoint holds every thread's transcript — the same disclosure
+  `WORKSPACE_PERMISSIONS` denies the agent, by a route those rules do not cover. `workspace_artifacts` filters
+  on an allow-list of readable suffixes, so adding `.db` to it opens the hole;
+  `test_the_workspace_browser_never_offers_the_checkpoint_store` covers the sidecars too.
+- **The chat page's approval gate fails closed, like `main`'s.** Opening a thread that is paused mid-`save_draft`
+  with the sidebar toggle off would hand the graph a pending call with no middleware left to stop it, so the
+  page refuses to send rather than proceeding, and any decision that is not an explicit "Approve" — including a
+  deselected control — is a reject.
 
 ## Conventions
 

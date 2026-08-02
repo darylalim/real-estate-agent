@@ -668,6 +668,92 @@ def test_subagents_carry_their_own_skills() -> None:
     assert by_name["client-liaison"]["skills"] == ["/skills/client-comms"]
 
 
+# --- streamlit app --------------------------------------------------------
+#
+# `streamlit_app.py` is a second consumer of the package, alongside `main.py`,
+# and it necessarily repeats two things the CLI already does. Both fail quietly
+# rather than loudly, which is the criterion for pinning them here.
+
+
+def test_streamlit_keys_messages_exactly_as_the_cli_does() -> None:
+    """One dedupe key, two renderers.
+
+    `stream_mode="values"` re-emits the entire message list on every chunk, so
+    anything rendering a stream has to suppress repeats. The CLI and the app
+    share threads through one checkpoint database — if the keys ever disagree, a
+    thread started in one reprints its whole history in the other, and nothing
+    raises.
+    """
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    import main
+    from ui.agent_session import message_key
+
+    for message in (HumanMessage("an earlier turn", id="msg-1"), AIMessage("no id here")):
+        assert message_key(message) == main._message_key(message)
+
+
+def test_the_workspace_browser_never_offers_the_checkpoint_store(
+    tmp_path, monkeypatch
+) -> None:
+    """The sidebar lists workspace files and wires them to a download button.
+
+    `checkpoints.db` lives under `workspace/` and holds every thread's full
+    transcript — which is precisely why `WORKSPACE_PERMISSIONS` denies the agent
+    read and write on it. A file browser is the same disclosure by another
+    route, so the allow-list has to keep excluding it, SQLite sidecars included.
+    """
+    from ui import agent_session
+
+    monkeypatch.setattr(agent_session, "WORKSPACE_DIR", tmp_path)
+    (tmp_path / "drafts").mkdir()
+    (tmp_path / "shortlist.md").write_text("visible", encoding="utf-8")
+    (tmp_path / "drafts" / "follow-up.eml").write_text("visible", encoding="utf-8")
+    for name in ("checkpoints.db", "checkpoints.db-wal", "checkpoints.db-shm"):
+        (tmp_path / name).write_bytes(b"every other thread's transcript")
+
+    assert {path.name for path in agent_session.workspace_artifacts()} == {
+        "shortlist.md",
+        "follow-up.eml",
+    }
+
+
+def test_pending_actions_flattens_every_hanging_call() -> None:
+    """One decision per pending call, or the middleware rejects the whole resume.
+
+    A single interrupt can carry several `action_requests`, so counting
+    interrupts is not counting actions — the CLI shipped exactly that bug,
+    building one decision no matter how many calls were pending.
+    """
+    from ui.agent_session import pending_actions
+
+    def _interrupt(count: int) -> Any:
+        requests = [{"name": "save_draft", "args": {"filename": f"d{i}"}} for i in range(count)]
+        return type("_Interrupt", (), {"value": {"action_requests": requests}})()
+
+    state = type("_State", (), {"interrupts": [_interrupt(2), _interrupt(1)]})()
+    agent = type("_Agent", (), {"get_state": lambda _self, _config: state})()
+
+    assert len(pending_actions(agent, {})) == 3
+
+
+def test_the_chat_page_refuses_a_thread_paused_without_the_gate() -> None:
+    """The same fail-closed rule as `main`, in the second entry point.
+
+    `interrupt_on` is only wired when approval is switched on, so opening a
+    paused thread with the toggle off would leave a pending `save_draft` with no
+    middleware left to stop it. Asserted on source for the reason the CLI's
+    version gives: reaching the branch needs a graph paused mid-tool-call, which
+    needs a model call.
+    """
+    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
+    parts = source.split("if actions and not st.session_state.require_approval:", 1)
+    assert len(parts) == 2, "the page must check for a pending approval before sending"
+    assert "st.stop()" in parts[1].split("history = stored_messages", 1)[0], (
+        "the no-toggle path must stop rather than fall through to a turn"
+    )
+
+
 # --- toolchain configuration ----------------------------------------------
 #
 # "N tests, ty clean, ruff clean" is only a gate if "clean" cannot quietly

@@ -29,6 +29,26 @@ picked up in a later run. Every invocation prints its thread id:
 uv run python main.py --thread 8f2c1e04-...   # continue where you left off
 ```
 
+## Web UI
+
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+Two pages over the same project:
+
+- **Chat** — the browser analogue of `main.py`. Drives the real orchestrator,
+  shows each delegation and tool result as it happens, and lists what the
+  specialists wrote to `/workspace/`. History is rendered from the checkpoint
+  database rather than from browser state, so a thread id printed by the CLI can
+  be pasted in and resumed here — and vice versa. The approval gate is a sidebar
+  toggle, and it fails closed the same way the CLI's does: a thread paused
+  mid-`save_draft` refuses to accept a new turn until the toggle is back on.
+- **Market** — supply, pricing and absorption over the listings provider. No
+  model runs and no API key is needed. Its headline numbers come from the
+  agent's own `market_statistics` tool rather than a second implementation, so
+  the dashboard cannot quietly disagree with what the analyst was told.
+
 Checks — all three must pass. No API calls, no key required:
 
 ```bash
@@ -38,7 +58,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 55 tests, ~0.9s
+uv run pytest tests/ -q       # 59 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -89,6 +109,7 @@ already given.
 | `src/real_estate_agent/providers/` | `ListingsProvider` protocol + mock feed |
 | `skills/` | Progressive-disclosure methodology, loaded on demand |
 | `workspace/` | Agent scratch space (gitignored) |
+| `streamlit_app.py`, `app_pages/`, `ui/` | The web UI — a consumer of the package, like `main.py` |
 
 ## Plugging in real listings data
 
