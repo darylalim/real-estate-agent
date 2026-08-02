@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 61 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 63 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -134,7 +134,7 @@ inherits** — a clone without Claude Code gets none of them, which is why the e
 | `session-start.sh` | SessionStart | Records the starting commit, so the Stop gate can see work committed mid-turn |
 | `static-gate.sh` | PostToolUse(Edit\|Write) | ruff + ty on `.py` edits, 0.12s |
 | `protect-files.sh` | PreToolUse | Denies `.env` and `uv.lock` via Edit/Write/NotebookEdit, and `.env` reads via Bash |
-| `confirm-live-run.sh` | PreToolUse | Asks before `main.py`, the only command here that spends money |
+| `confirm-live-run.sh` | PreToolUse | Asks before `main.py` and `streamlit run` — the two commands that reach the model |
 | `done-gate.sh` | Stop | `scripts/check.sh` always; the 3.11 floor leg when Python changed |
 
 Both `PreToolUse` hooks share one registration in `.claude/settings.json` — a single
@@ -225,6 +225,17 @@ Three things that are not obvious:
 - **No Altair.** Its fluent builder (`alt.Chart(...).mark_bar().encode(...)`) is opaque to ty, which reports
   `unresolved-attribute` on `.encode` — and `error-on-warning = true` makes that a failure. `market.py`
   pre-bins prices in plain Python and uses `st.bar_chart`. Reach for a native chart before an ignore comment.
+- **One provider, in `ui/provider.py`, for both pages.** `get_agent` passes it explicitly rather than letting
+  `build_agent` fall back to its own `MockListingsProvider`. Two instances of the deterministic mock are
+  indistinguishable — which is why the split survived review — but a real feed would put the analyst and the
+  dashboard on different snapshots, and taking the agent live would need two edits, not the one the README
+  promises.
+- **`thread_snapshot` is one checkpoint read.** `get_state` takes the saver's lock and deserialises the whole
+  message list on every call, and a Streamlit script re-runs for *every* interaction, including ones with
+  nothing to do with the agent. `stored_messages` and `pending_actions` remain as thin wrappers because the
+  tests use them; the page itself takes the snapshot.
+- **`market.py` imports its thresholds from `tools/market.py`.** The seller/balanced/buyer badge and the
+  `interpretation_hint` printed at the foot of the same page would otherwise be two copies of 4 and 6.
 
 ## Invariants that fail silently
 
@@ -300,10 +311,22 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   `save_draft` would have gone through unattended. Order is the fix, `persist_state="session"` the second line
   of defence, and `test_the_approval_toggle_renders_before_anything_that_can_rerun` pins both.
 
-**The Streamlit lesson behind all three:** widget state is keyed and lifecycle-bound. If a keyed widget does
+- **The decision control must get a fresh key for each approval round.** The worst instance of the rule above,
+  because it defeats the gate rather than merely mis-displaying it: `default="Reject"` applies only to a key
+  Streamlit holds no value for, so after one approval the *next* interrupt's form already read "Approve" and a
+  reviewer who checked the arguments and pressed submit approved something they never chose. Measured:
+  `clear_on_submit=True` does **not** restore the default, and `del st.session_state[key]` after the widget has
+  rendered breaks the widget. `approval_round` advances on every submission so the next form gets keys that
+  have never been seen. `test_the_decision_control_gets_a_fresh_key_for_each_approval_round` pins both halves.
+- **A turn always re-runs the page.** The sidebar's workspace list is built near the top of a run, before the
+  turn writes anything, so a conditional re-run left the answer citing a CMA by path while the sidebar still
+  said "Nothing written yet". The cost is one repaint of content re-read from the checkpoint.
+
+**The Streamlit lesson behind all five:** widget state is keyed and lifecycle-bound. If a keyed widget does
 not render on a run its value is discarded; if it does render with the same key, the *stored* value wins over
 the `value=`/`default=` you passed. Neither is an error. Prefer stateless elements for anything you are only
-displaying, and render anything load-bearing before the first `st.rerun()`.
+displaying, render anything load-bearing before the first `st.rerun()`, and give a widget a key that changes
+when the thing it is asking about changes.
 
 ## Conventions
 

@@ -22,24 +22,12 @@ import pandas as pd
 import streamlit as st
 from langchain_core.tools import BaseTool
 
-from real_estate_agent.providers.base import ListingsProvider
-from real_estate_agent.providers.mock import MockListingsProvider
 from real_estate_agent.tools import make_market_tools
+from ui.provider import get_provider
 
 # The mock holds 66 listings; a real provider could hold far more. This is the
 # same ceiling `market_statistics` and `qualify_lead` use internally.
 _SEARCH_LIMIT = 500
-
-
-@st.cache_resource
-def get_provider() -> ListingsProvider:
-    """The listings data source.
-
-    Swapping this for a real feed is the same one-line change described in the
-    README -- the dashboard depends on the ``ListingsProvider`` protocol, not on
-    the mock.
-    """
-    return MockListingsProvider()
 
 
 @st.cache_resource
@@ -95,6 +83,12 @@ def listings_frame(
     # `sold_date` is ISO-8601 text on the dataclass; the table and any date
     # filtering want a real datetime.
     frame["sold_date"] = pd.to_datetime(frame["sold_date"], errors="coerce")
+    # The basis every statistic on the page already uses: `_summarize_prices`
+    # and `Listing.price_per_sqft` both prefer `sold_price` where it exists.
+    # Charting `price` instead plots a sold listing's *asking* price next to a
+    # median derived from what it actually fetched — on the mock that gap runs
+    # to 6%, and nothing on screen says which is which.
+    frame["effective_price"] = frame["sold_price"].fillna(frame["price"])
     return frame
 
 

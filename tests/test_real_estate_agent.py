@@ -800,6 +800,51 @@ def test_the_approval_toggle_renders_before_anything_that_can_rerun() -> None:
     )
 
 
+def test_the_decision_control_gets_a_fresh_key_for_each_approval_round() -> None:
+    """The fail-closed default has to survive a second interrupt.
+
+    `default="Reject"` only applies to a key Streamlit holds no value for; on
+    every later render the *stored* value wins. Keyed by position alone,
+    approving one call left the next interrupt's form already reading
+    "Approve" — so a reviewer who scanned the new arguments and pressed submit
+    approved something they never chose. Measured: `clear_on_submit=True` does
+    not restore the default, and deleting the key mid-run breaks the widget.
+    Advancing a round number on each submission mints keys never seen before,
+    which does.
+    """
+    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
+    assert 'key=f"decision_{approval_round}_{index}"' in source, (
+        "key the decision control per approval round, not by position alone"
+    )
+    assert "st.session_state.approval_round += 1" in source, (
+        "the round must advance on submit, or the next form reuses these keys"
+    )
+
+
+def test_the_app_and_the_cli_flatten_interrupts_identically() -> None:
+    """Two implementations of one contract, over the same checkpoint database.
+
+    `HumanInTheLoopMiddleware` validates that the number of decisions equals the
+    number of hanging tool calls, so a divergence here does not degrade — the
+    whole resume raises. The CLI shipped this wrong once, building one decision
+    no matter how many calls were pending, which is why the pair is pinned
+    rather than either side alone. The empty-requests case is included because
+    that is where the placeholder fallback lives.
+    """
+    import main
+    from ui.agent_session import pending_actions
+
+    def _interrupt(count: int) -> Any:
+        requests = [{"name": "save_draft", "args": {"filename": f"d{i}"}} for i in range(count)]
+        return type("_Interrupt", (), {"value": {"action_requests": requests}})()
+
+    interrupts = [_interrupt(2), _interrupt(1), _interrupt(0)]
+    state = type("_State", (), {"interrupts": interrupts})()
+    agent = type("_Agent", (), {"get_state": lambda _self, _config: state})()
+
+    assert pending_actions(agent, {}) == main._action_requests(interrupts)
+
+
 # --- toolchain configuration ----------------------------------------------
 #
 # "N tests, ty clean, ruff clean" is only a gate if "clean" cannot quietly

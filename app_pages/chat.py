@@ -16,24 +16,21 @@ than reinventing:
 """
 
 import uuid
+from pathlib import Path
 
 import streamlit as st
 from langgraph.types import Command
 
-from real_estate_agent.config import (
-    DEFAULT_MODEL,
-    SUBAGENT_MODEL,
-    WORKSPACE_DIR,
-    require_api_key,
-)
+from real_estate_agent.config import DEFAULT_MODEL, SUBAGENT_MODEL, require_api_key
 from ui.agent_session import (
     get_agent,
     message_key,
-    pending_actions,
+    read_workspace_file,
     render_message,
-    stored_messages,
     stream_turn,
+    thread_snapshot,
     workspace_artifacts,
+    workspace_path,
 )
 
 SUGGESTIONS = {
@@ -113,23 +110,30 @@ with st.sidebar:
     if not artifacts:
         st.caption("Nothing written yet. Specialists write here as they work.")
     else:
-        names = [str(path.relative_to(WORKSPACE_DIR)) for path in artifacts]
+        # Already relative to the workspace root, and handed straight back to
+        # `read_workspace_file` — the page never does path arithmetic of its own.
+        names = [str(path) for path in artifacts]
         chosen = st.selectbox(
             "File", names, key="artifact", label_visibility="collapsed"
         )
-        selected = WORKSPACE_DIR / chosen
         try:
-            payload = selected.read_bytes()
-        except OSError as exc:
+            payload, truncated = read_workspace_file(chosen)
+        except (OSError, ValueError) as exc:
             st.caption(f"Could not read it: {exc}")
         else:
-            st.download_button(
-                "Download",
-                payload,
-                file_name=selected.name,
-                icon=":material/download:",
-                width="stretch",
-            )
+            if truncated:
+                st.caption(
+                    "Too large to serve inline — the whole file is on disk at "
+                    f"`{workspace_path(chosen)}`."
+                )
+            else:
+                st.download_button(
+                    "Download",
+                    payload,
+                    file_name=Path(chosen).name,
+                    icon=":material/download:",
+                    width="stretch",
+                )
             with st.expander("Preview", icon=":material/description:"):
                 st.code(payload.decode("utf-8", errors="replace"), language="markdown")
 
@@ -141,7 +145,9 @@ with st.sidebar:
 agent = get_agent(st.session_state.require_approval)
 config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
-actions = pending_actions(agent, config)
+# One checkpoint read for both, not one each -- `get_state` deserialises the
+# whole message list every call, and this script reruns on every interaction.
+history, actions = thread_snapshot(agent, config)
 
 # Nothing here ever re-approves anything: the only two outcomes are "ask now" or
 # "do not proceed". Same rule as `main`, which exits 1 in this situation.
@@ -154,7 +160,6 @@ if actions and not st.session_state.require_approval:
     )
     st.stop()
 
-history = stored_messages(agent, config)
 for message in history:
     render_message(message)
 seen = {message_key(message) for message in history}
@@ -164,6 +169,19 @@ if actions:
         f"Approval required — {len(actions)} action(s) pending.",
         icon=":material/pause_circle:",
     )
+    # Widget keys carry a round number that advances on every submission. The
+    # decision control is keyed, and a keyed widget's *stored* value beats the
+    # `default=` on every later render -- so with keys indexed by position
+    # alone, approving one call left the next interrupt's form already showing
+    # "Approve", and a reviewer who read the new arguments and pressed submit
+    # approved something they never chose. Same rule as the argument display
+    # below, but here it defeats the fail-closed default rather than merely
+    # showing stale text. Advancing the round mints keys that have never been
+    # seen, so `default="Reject"` applies again; `clear_on_submit` and deleting
+    # the keys were both tried first and neither restores the default.
+    st.session_state.setdefault("approval_round", 0)
+    approval_round = st.session_state.approval_round
+
     with st.form("approval"):
         for index, action in enumerate(actions):
             st.markdown(f"**{index + 1} of {len(actions)} · `{action.get('name')}`**")
@@ -187,9 +205,9 @@ if actions:
                 "Decision",
                 ["Reject", "Approve"],
                 default="Reject",
-                key=f"decision_{index}",
+                key=f"decision_{approval_round}_{index}",
             )
-            st.text_input("Reason (optional)", key=f"reason_{index}")
+            st.text_input("Reason (optional)", key=f"reason_{approval_round}_{index}")
         submitted = st.form_submit_button("Submit decisions", icon=":material/gavel:")
 
     if submitted:
@@ -198,11 +216,15 @@ if actions:
         # a deselected control -- is a reject.
         decisions: list[dict[str, object]] = []
         for index in range(len(actions)):
-            if st.session_state.get(f"decision_{index}") == "Approve":
+            if st.session_state.get(f"decision_{approval_round}_{index}") == "Approve":
                 decisions.append({"type": "approve"})
                 continue
-            reason = (st.session_state.get(f"reason_{index}") or "").strip()
+            reason = (st.session_state.get(f"reason_{approval_round}_{index}") or "").strip()
             decisions.append({"type": "reject", **({"message": reason} if reason else {})})
+
+        # Read the decisions first, then retire this round so the next form --
+        # for the next interrupt -- renders on untouched keys.
+        st.session_state.approval_round += 1
 
         # A mapping, not a bare list: the middleware reads
         # `interrupt(request)["decisions"]`.
@@ -229,8 +251,10 @@ if not prompt and suggestion and suggestion != st.session_state.last_suggestion:
 
 if prompt:
     stream_turn(agent, {"messages": [{"role": "user", "content": prompt}]}, config, seen)
-    # Only rerun when the turn parked on an interrupt, because that is the one
-    # case where new UI has to appear. Otherwise the streamed output stands and
-    # the next interaction re-renders it from the checkpoint.
-    if pending_actions(agent, config):
-        st.rerun()
+    # Always, not only when an interrupt is pending. The sidebar's workspace
+    # list is built near the top of the run, before the turn writes anything --
+    # so without this the shortlist, CMA and drafts the specialists just created
+    # stay invisible until some later, unrelated interaction, while the answer
+    # already on screen refers to them by path. The cost is one repaint of
+    # content re-read from the checkpoint, not re-generated.
+    st.rerun()

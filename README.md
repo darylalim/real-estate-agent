@@ -58,7 +58,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 61 tests, ~0.9s
+uv run pytest tests/ -q       # 63 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -178,6 +178,8 @@ it to recommend an attorney, appraiser, or lender rather than substitute for one
 
 ## Verified behaviour
 
+### The CLI
+
 Run live against `anthropic:claude-opus-5`, traces in LangSmith:
 
 | Check | Result |
@@ -189,7 +191,9 @@ Run live against `anthropic:claude-opus-5`, traces in LangSmith:
 | Fair-housing guardrail | Refused "family-friendly", "young professionals", "safe neighborhood", "good schools" with the legal basis for each, and supplied compliant copy |
 | Approval gate, both directions | Approve writes the draft; reject blocks it; exhausted/absent input **fails closed** rather than crashing or approving |
 
-The web UI was then run live against the same model, with approval switched on:
+### The web UI
+
+Then run live against the same model, with approval switched on:
 
 | Check | Result |
 |---|---|
@@ -200,9 +204,9 @@ The web UI was then run live against the same model, with approval switched on:
 | Approve | `.md` and `.eml` both written, `X-Unsent: 1` present, real listing data, and the model flagged the pending status rather than guessing whether the contract would close |
 | Workspace browser | Populated as specialists wrote; the checkpoint database stayed out of it |
 
-Three defects it exposed, since fixed and regression-tested. All three are the
-same Streamlit rule — **widget state is keyed and lifecycle-bound** — and none
-of them raised:
+Five defects, since fixed and regression-tested — three the run exposed, two a
+later code review found in the same family. All five are one Streamlit rule —
+**widget state is keyed and lifecycle-bound** — and none of them raised:
 
 - **The approval toggle switched itself off.** `st.rerun()` fires from inside
   the sidebar, which aborts the run before any widget declared after it renders
@@ -221,13 +225,26 @@ of them raised:
   blur or Enter, so a plain button beside it submitted the *previous* value:
   typing an id and clicking Load did nothing, silently, until you pressed Enter
   first. Both now live in one `st.form`.
+- **The decision control kept the previous reviewer's answer.** The same rule as
+  the argument display, one widget over — and worse, because it defeats the
+  fail-closed default rather than only showing stale text. `default="Reject"`
+  applies to a key Streamlit holds no value for; on any later render the stored
+  value wins. So approving one call left the *next* interrupt's form already
+  reading "Approve", and a reviewer who checked the new arguments and pressed
+  submit approved something they never chose. Measured: `clear_on_submit=True`
+  does not restore the default and deleting the key mid-run breaks the widget.
+  The keys now carry a round number that advances on every submission.
+- **The workspace list lagged a turn behind.** The sidebar is built near the top
+  of a run, before the turn writes anything, and the page only re-ran when an
+  interrupt was pending — so the answer on screen could cite a CMA by path while
+  the sidebar still read "Nothing written yet". A turn now always re-runs.
 
-Re-verified live afterwards, with the redraft loop that produced the second
+Re-verified live afterwards, with the redraft loop that produces a second
 interrupt: an identical filename and subject with a changed body — the exact
 shape the stale-argument bug hid — displayed the new body, and the text written
-on approval matched the text on screen.
+on approval matched the text on screen byte for byte.
 
-Three defects the run exposed, since fixed:
+Three defects the CLI run above exposed, since fixed:
 
 - `comparables()` ranked by similarity but never **rejected** on size, handing
   back comps the CMA methodology discards anyway. It now applies a size screen

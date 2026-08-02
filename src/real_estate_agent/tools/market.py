@@ -15,6 +15,13 @@ from langchain_core.tools import BaseTool
 
 from real_estate_agent.providers.base import Listing, ListingsProvider
 
+# Months-of-inventory thresholds. Exported, and the interpretation hint below is
+# built from them, because the reading is shown in two places: the hint the
+# analyst reads, and the Streamlit dashboard's badge. A second hardcoded copy
+# drifts silently, and the two then disagree on the same screen.
+SELLERS_MARKET_MONTHS = 4
+BUYERS_MARKET_MONTHS = 6
+
 
 def _summarize_prices(listings: Sequence[Listing]) -> dict[str, float | int | None]:
     """Central-tendency stats over a listing set, or nulls when empty."""
@@ -200,8 +207,9 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                 "closed_sales": sold_stats,
                 "months_of_inventory": months_of_inventory,
                 "interpretation_hint": (
-                    "Under ~4 months of inventory generally indicates a seller's market; "
-                    "over ~6 months indicates a buyer's market."
+                    f"Under ~{SELLERS_MARKET_MONTHS} months of inventory generally "
+                    f"indicates a seller's market; over ~{BUYERS_MARKET_MONTHS} months "
+                    "indicates a buyer's market."
                 ),
             },
             indent=2,

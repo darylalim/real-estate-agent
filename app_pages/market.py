@@ -11,6 +11,7 @@ from collections import Counter
 import pandas as pd
 import streamlit as st
 
+from real_estate_agent.tools.market import BUYERS_MARKET_MONTHS, SELLERS_MARKET_MONTHS
 from ui.market_data import (
     dataset_choices,
     listings_frame,
@@ -33,13 +34,21 @@ st.caption(
 
 
 def _money(value: float | None, *, cents: bool = False) -> str:
+    """Currency, with any minus sign *outside* the symbol.
+
+    `st.metric` classifies a delta's direction with
+    `str(delta).startswith("-")`, so "$-36,500" reads as an increase and draws a
+    green up-arrow — the exact inversion of what a below-asking market means.
+    "-$36,500" is read correctly.
+    """
     if value is None:
         return "—"
-    return f"${value:,.2f}" if cents else f"${value:,.0f}"
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.2f}" if cents else f"{sign}${abs(value):,.0f}"
 
 
-def _plain(value: float | None, suffix: str = "") -> str:
-    return "—" if value is None else f"{value:,.0f}{suffix}"
+def _plain(value: float | None) -> str:
+    return "—" if value is None else f"{value:,.0f}"
 
 
 cities, property_types = dataset_choices()
@@ -72,13 +81,15 @@ active = snapshot["active_inventory"]
 closed = snapshot["closed_sales"]
 months_of_inventory = snapshot["months_of_inventory"]
 
-# The tool ships its own reading of this number; mirror its thresholds rather
-# than inventing new ones.
+# Imported, not re-typed. The tool ships its own reading of this number in
+# `interpretation_hint`, which is printed verbatim at the bottom of this page —
+# a second hardcoded 4/6 here would let the badge and the caption contradict
+# each other on the same screen after a one-line change in tools/market.py.
 if months_of_inventory is None:
     reading = "No closed sales in the window"
-elif months_of_inventory < 4:
+elif months_of_inventory < SELLERS_MARKET_MONTHS:
     reading = "Seller's market"
-elif months_of_inventory > 6:
+elif months_of_inventory > BUYERS_MARKET_MONTHS:
     reading = "Buyer's market"
 else:
     reading = "Balanced market"
@@ -130,13 +141,16 @@ left, right = st.columns(2)
 with left, st.container(border=True):
     st.subheader("Price distribution")
     banded = Counter(
-        int(price // _PRICE_BAND) * _PRICE_BAND for price in frame["price"].tolist()
+        int(price // _PRICE_BAND) * _PRICE_BAND
+        for price in frame["effective_price"].tolist()
     )
-    bands = sorted(banded)
+    # Every band across the range, including the empty ones. `Counter` holds
+    # only what it saw, and `st.bar_chart` treats even a numeric x as ordinal —
+    # so a band with no listings would not leave a gap, it would vanish, and its
+    # neighbours would close up. A bimodal market then reads as unimodal.
+    bands = list(range(min(banded), max(banded) + _PRICE_BAND, _PRICE_BAND))
     st.bar_chart(
-        pd.DataFrame(
-            {"band": bands, "listings": [banded[band] for band in bands]}
-        ),
+        pd.DataFrame({"band": bands, "listings": [banded.get(b, 0) for b in bands]}),
         x="band",
         y="listings",
         x_label=f"Price band (${_PRICE_BAND // 1000}k wide, lower bound)",
@@ -149,10 +163,10 @@ with right, st.container(border=True):
     st.scatter_chart(
         frame,
         x="sqft",
-        y="price",
+        y="effective_price",
         color="property_type",
         x_label="Living area (sqft)",
-        y_label="Price ($)",
+        y_label="Price ($) — sold price where there is one",
         height=280,
     )
 
@@ -181,6 +195,9 @@ with st.container(border=True):
             "latitude": None,
             "longitude": None,
             "description": None,
+            # Derived for the charts; `price` and `sold_price` are both already
+            # columns here, so showing it too would just be a third of the same.
+            "effective_price": None,
         },
     )
 
