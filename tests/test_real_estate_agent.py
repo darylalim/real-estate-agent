@@ -593,6 +593,42 @@ def test_cli_builds_with_a_durable_checkpointer() -> None:
     assert "checkpointer=checkpointer" in source
 
 
+# Both fail-closed gates -- the CLI's and the chat page's -- are asserted on the
+# syntax tree rather than the source text, because reaching either real branch
+# needs a graph paused mid-tool-call, which needs a model call. A tree is the
+# right shape for the question they ask ("is this statement inside that block")
+# and, unlike a bounded `source.split(marker, 1)[0]`, has no marker that can go
+# missing and silently widen the search to the rest of the file.
+
+
+def _sole_guard(scope: ast.AST, *words: str) -> ast.If:
+    """The one `if` under `scope` whose condition mentions every one of `words`.
+
+    Matching on identifiers rather than a rendered string so that reformatting
+    the condition -- reordering `and` operands, wrapping a long line -- does not
+    count as a change in what it guards.
+    """
+    found = [
+        node
+        for node in ast.walk(scope)
+        if isinstance(node, ast.If)
+        and set(words) <= set(re.findall(r"\w+", ast.unparse(node.test)))
+    ]
+    assert len(found) == 1, (
+        f"expected exactly one guard whose condition mentions {words}, found {len(found)}"
+    )
+    return found[0]
+
+
+def _function_named(path: Path, name: str) -> ast.FunctionDef:
+    """One top-level function's tree, read from the file rather than imported."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{path.name} has no top-level `def {name}`")
+
+
 def test_resuming_a_pending_approval_without_the_flag_refuses() -> None:
     """The gate must not fail open across processes.
 
@@ -601,21 +637,34 @@ def test_resuming_a_pending_approval_without_the_flag_refuses() -> None:
     is passed. Resuming such a thread without the flag would hand the graph a
     still-pending `save_draft` and nothing left to stop it, so `main` refuses.
 
-    Asserted on source because reaching the real branch needs a graph paused
-    mid-tool-call, which needs a model call.
+    The third assertion is the one the previous version of this test described
+    but never checked: the refusal has to come *before* the turn is sent.
+    Draining the interrupt from inside `_turn` is too late — `_pump` has already
+    put the new message on the graph by then — so ordering is the invariant, not
+    merely the presence of a guard somewhere in the function.
     """
-    import inspect
+    main_fn = _function_named(PROJECT_ROOT / "main.py", "main")
 
-    import main
+    pending = _sole_guard(main_fn, "_pending_approvals")
+    no_flag = _sole_guard(pending, "args", "require_approval")
 
-    source = inspect.getsource(main.main)
-    assert "_pending_approvals(agent, config)" in source, (
-        "main must check for a stored interrupt before sending a new turn"
-    )
-    guard = source.split("_pending_approvals(agent, config)", 1)[1]
-    assert "if not args.require_approval:" in guard
-    assert "return 1" in guard.split("_handle_interrupts", 1)[0], (
-        "the no-flag path must exit non-zero rather than fall through to a turn"
+    assert any(
+        isinstance(statement, ast.Return)
+        and statement.value is not None
+        and ast.unparse(statement.value) == "1"
+        for statement in no_flag.body
+    ), "the no-flag path must exit non-zero rather than fall through to a turn"
+
+    turns = [
+        node
+        for node in ast.walk(main_fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_turn"
+    ]
+    assert turns, "main no longer sends a turn; this test is checking nothing"
+    assert pending.lineno < min(call.lineno for call in turns), (
+        "the pending-approval check must run before any turn is sent, not after"
     )
 
 
@@ -757,20 +806,26 @@ def test_the_chat_page_refuses_a_thread_paused_without_the_gate() -> None:
     bound to go stale: it asks the guard itself what is in its body.
     """
     tree = ast.parse((PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8"))
-    guards = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.If)
-        and {"actions", "require_approval"} <= set(re.findall(r"\w+", ast.unparse(node.test)))
-    ]
-    assert len(guards) == 1, (
-        "expected exactly one 'pending actions but no gate' guard on the page, "
-        f"found {len(guards)}"
-    )
+    guard = _sole_guard(tree, "actions", "require_approval")
+
     # A *direct* child of the body: nested inside a further condition, the stop
     # is reachable rather than certain, which is the whole distinction here.
-    assert any(ast.unparse(statement) == "st.stop()" for statement in guards[0].body), (
+    assert any(ast.unparse(statement) == "st.stop()" for statement in guard.body), (
         "the no-toggle path must stop unconditionally rather than fall through to a turn"
+    )
+
+    # The page's counterpart to `main`'s ordering assertion: nothing may be sent
+    # to the graph above the guard.
+    sends = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "stream_turn"
+    ]
+    assert sends, "the page no longer sends a turn; this test is checking nothing"
+    assert guard.lineno < min(call.lineno for call in sends), (
+        "the pending-approval check must run before any turn is sent, not after"
     )
 
 

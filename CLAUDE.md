@@ -292,6 +292,10 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   such a thread without the flag would hand the graph a pending `save_draft` with no middleware left to stop
   it. `main` checks `_pending_approvals` before sending any turn and exits 1 rather than proceeding. Draining
   it from inside `_turn` alone is not enough: that runs *after* `_pump` has already sent the new message.
+  **The ordering half of that went unchecked until the `ast` conversion**, on both entry points — the old tests
+  asserted the guard existed and exited, not that it ran first, and both stayed green with a turn spliced in
+  above the check. Each test now compares the guard's line number against the first `_turn` / `stream_turn`
+  call, which is the assertion the prose above was already making.
 - **Resuming replays the stored messages, so `_already_rendered` seeds the dedupe set.** `stream_mode="values"`
   re-emits the entire message list on every chunk and `main._pump` suppresses repeats with a `seen` set keyed
   on `message.id`. That set starts empty in a new process, so without seeding it from the checkpoint the whole
@@ -310,8 +314,15 @@ of the file" and the test keeps passing on evidence from somewhere else entirely
 to `test_the_chat_page_refuses_a_thread_paused_without_the_gate`: its bound was `history = stored_messages`,
 which left the page when the two checkpoint reads were consolidated into `thread_snapshot`, and from then on the
 approval form's own `st.stop()` satisfied a test about the fail-closed guard. Measured: deleting the guard's
-`st.stop()` outright left it green. It reads the syntax tree now. **Prefer `ast` over a bounded `split` for
-anything asserting that a statement is inside a particular block** — a tree has no bound to go stale.
+`st.stop()` outright left it green. **Prefer `ast` over a bounded `split` for anything asserting that a
+statement is inside a particular block** — a tree has no bound to go stale.
+
+Both fail-closed gate tests read the tree now, through one shared `_sole_guard(scope, *words)` helper: it finds
+the single `if` under `scope` whose condition mentions every one of `words`, matching on *identifiers* rather
+than a rendered string so reformatting the condition is not a change in what it guards. Converting the CLI's
+`test_resuming_a_pending_approval_without_the_flag_refuses` turned up a second gap on its own — see the
+ordering note below. `test_resume_payload_is_a_mapping_not_a_list` is still a text assertion; it checks for a
+literal in a function rather than a statement's position, which is the case text handles fine.
 - **Tests monkeypatch module-level constants** (`comms.DRAFTS_DIR`, `documents.DOCUMENTS_DIR`). Those names must
   stay module globals resolved at call time — rebinding them into defaults or a local alias breaks the patching.
 - **`save_draft` is the only sanctioned way to produce a draft.** Adding a second path (e.g. `write_file`) was a
