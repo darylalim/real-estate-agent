@@ -743,15 +743,34 @@ def test_the_chat_page_refuses_a_thread_paused_without_the_gate() -> None:
 
     `interrupt_on` is only wired when approval is switched on, so opening a
     paused thread with the toggle off would leave a pending `save_draft` with no
-    middleware left to stop it. Asserted on source for the reason the CLI's
-    version gives: reaching the branch needs a graph paused mid-tool-call, which
-    needs a model call.
+    middleware left to stop it. Asserted on the page rather than by running it,
+    for the reason the CLI's version gives: reaching the branch needs a graph
+    paused mid-tool-call, which needs a model call.
+
+    On the syntax tree rather than the source text, because the text version of
+    this test stopped testing anything. It bounded its search with
+    `.split("history = stored_messages", 1)[0]`, and that line left the page when
+    the two checkpoint reads were consolidated into `thread_snapshot` — a split
+    on an absent separator returns the whole string, so the bound silently became
+    "anywhere below the guard", where the approval form's own `st.stop()` lives.
+    Deleting the fail-closed stop would have kept it green. The tree carries no
+    bound to go stale: it asks the guard itself what is in its body.
     """
-    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
-    parts = source.split("if actions and not st.session_state.require_approval:", 1)
-    assert len(parts) == 2, "the page must check for a pending approval before sending"
-    assert "st.stop()" in parts[1].split("history = stored_messages", 1)[0], (
-        "the no-toggle path must stop rather than fall through to a turn"
+    tree = ast.parse((PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8"))
+    guards = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and {"actions", "require_approval"} <= set(re.findall(r"\w+", ast.unparse(node.test)))
+    ]
+    assert len(guards) == 1, (
+        "expected exactly one 'pending actions but no gate' guard on the page, "
+        f"found {len(guards)}"
+    )
+    # A *direct* child of the body: nested inside a further condition, the stop
+    # is reachable rather than certain, which is the whole distinction here.
+    assert any(ast.unparse(statement) == "st.stop()" for statement in guards[0].body), (
+        "the no-toggle path must stop unconditionally rather than fall through to a turn"
     )
 
 

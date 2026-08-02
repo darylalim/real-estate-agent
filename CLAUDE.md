@@ -301,6 +301,17 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   exactly one decision per pending tool call. The gate **fails closed** — exhausted or absent stdin rejects.
   `test_resume_payload_is_a_mapping_not_a_list` asserts on the *source text* of `main._handle_interrupts`, so
   refactoring that function can break the test without changing behaviour; keep the literal or update the test.
+
+**Source-text tests fail in two directions, and only one of them is loud.** The bullet above is the loud one:
+the literal goes missing and the test goes red. The quiet one is a *bounded* search — `source.split(marker,
+1)[0]` — where the marker is what stops the search running past the region under test. `str.split` on an absent
+separator returns the whole string, so when a refactor removes the marker the bound silently widens to "the rest
+of the file" and the test keeps passing on evidence from somewhere else entirely. That is exactly what happened
+to `test_the_chat_page_refuses_a_thread_paused_without_the_gate`: its bound was `history = stored_messages`,
+which left the page when the two checkpoint reads were consolidated into `thread_snapshot`, and from then on the
+approval form's own `st.stop()` satisfied a test about the fail-closed guard. Measured: deleting the guard's
+`st.stop()` outright left it green. It reads the syntax tree now. **Prefer `ast` over a bounded `split` for
+anything asserting that a statement is inside a particular block** — a tree has no bound to go stale.
 - **Tests monkeypatch module-level constants** (`comms.DRAFTS_DIR`, `documents.DOCUMENTS_DIR`). Those names must
   stay module globals resolved at call time — rebinding them into defaults or a local alias breaks the patching.
 - **`save_draft` is the only sanctioned way to produce a draft.** Adding a second path (e.g. `write_file`) was a
@@ -317,7 +328,9 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
 - **The chat page's approval gate fails closed, like `main`'s.** Opening a thread that is paused mid-`save_draft`
   with the sidebar toggle off would hand the graph a pending call with no middleware left to stop it, so the
   page refuses to send rather than proceeding, and any decision that is not an explicit "Approve" — including a
-  deselected control — is a reject.
+  deselected control — is a reject. `test_the_chat_page_refuses_a_thread_paused_without_the_gate` reads the
+  page's **syntax tree**, not its text: it finds the guard and asserts `st.stop()` is a direct child of its
+  body. A nested one would be reachable rather than certain, which is the distinction the gate is.
 - **The approval form must render its arguments with a *stateless* element.** Keyed widgets persist: an
   `st.text_area(..., key=f"arg_{i}_{name}")` writes its first value into `session_state` and reuses it, so a
   second interrupt at the same index showed the **previous** call's arguments while the decision applied to the
