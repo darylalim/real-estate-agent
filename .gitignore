@@ -6,5 +6,7 @@ __pycache__/
 .ruff_cache/
 .ty_cache/
 
-# Agent scratch space — regenerated per run.
+# Agent scratch space. Mostly regenerated per run, but checkpoints.db holds
+# durable conversation state — deleting it discards every thread `--thread`
+# could resume.
 workspace/

@@ -11,6 +11,18 @@ dependencies = [
     "python-dotenv>=1.2.2",
 ]
 
+[tool.uv]
+# langgraph-checkpoint-sqlite requires sqlite-vec, and sqlite-vec ships wheels
+# only -- no sdist, and none for musllinux or armv7. That turns `uv sync
+# --locked` (the documented install and the CI step) into a hard failure on
+# Alpine and on 32-bit ARM, for a package the checkpointer never touches:
+# `grep -rn sqlite_vec` across langgraph/checkpoint/sqlite/ returns nothing,
+# and the sync saver imports stdlib sqlite3 only. An impossible marker drops
+# it. If a future release genuinely imports it, the thread tests fail on the
+# import rather than at some later runtime -- which is the point of overriding
+# rather than filtering the lock by hand.
+override-dependencies = ["sqlite-vec; sys_platform == 'never'"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

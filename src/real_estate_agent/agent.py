@@ -66,6 +66,16 @@ professional.
 # Exported so the test suite asserts against these exact rules rather than a
 # hand-copied duplicate that cannot fail when this list changes.
 WORKSPACE_PERMISSIONS: list[FilesystemPermission] = [
+    # First, because the allow below would otherwise match it. The checkpoint
+    # store lives inside /workspace/ (it is gitignored there), which is also the
+    # one subtree the agent can write -- so without this the model can truncate
+    # its own conversation history mid-session, and `read_file` on it returns
+    # every *other* thread's full transcript. Same reasoning as the .env deny:
+    # gitignored is not the same as out of reach. The `*` covers SQLite's -wal
+    # and -shm sidecars, which are just as damaging to clobber.
+    FilesystemPermission(
+        operations=["read", "write"], paths=["/workspace/checkpoints.db*"], mode="deny"
+    ),
     FilesystemPermission(operations=["read", "write"], paths=["/workspace/**"], mode="allow"),
     FilesystemPermission(operations=["read"], paths=["/skills/**"], mode="allow"),
     FilesystemPermission(

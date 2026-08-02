@@ -38,7 +38,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 48 tests, ~0.9s
+uv run pytest tests/ -q       # 55 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -176,8 +176,8 @@ Three defects the run exposed, since fixed:
   thin market.
 - The mock spread square footage too widely for a 66-listing dataset, so small
   properties had no size-matched comps and no CMA was possible. Sizes now
-  cluster; 28 of 35 active listings clear the 3-comp minimum, and a couple of
-  genuine outliers remain so the insufficient-comps path stays reachable.
+  cluster; 28 of 35 active listings clear the 3-comp minimum, and the other 7
+  remain genuine outliers so the insufficient-comps path stays reachable.
 - client-liaison had two ways to write a draft and used both, producing
   divergent copies. `save_draft` is now the only sanctioned path.
 

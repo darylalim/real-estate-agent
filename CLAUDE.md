@@ -29,7 +29,7 @@ uv run python main.py --thread <id>              # continue a conversation (pers
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 48 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 55 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -222,8 +222,20 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   resumed nothing across runs and the only symptom was a printed id that looked like it meant something.
   `main.py` now opens `SqliteSaver.from_conn_string(CHECKPOINT_DB)` for the whole session. Two consequences:
   the `with` block must wrap every `_turn`, because the connection closes on exit; and `ensure_workspace()`
-  has to run *before* it, since `from_conn_string` will not create the parent directory. `CHECKPOINT_DB`
-  lives under `workspace/` because that is gitignored, and a checkpoint file holds the full transcript.
+  has to run *before* it, since `from_conn_string` will not create the parent directory.
+  `test_cli_builds_with_a_durable_checkpointer` pins it, because the thread tests pass their own saver and so
+  stay green if `main.py` reverts to the default.
+- **`CHECKPOINT_DB` is denied in `WORKSPACE_PERMISSIONS`, and the deny must stay first.** It lives under
+  `workspace/` because that is gitignored — but gitignored is not out of reach, and `/workspace/**` is the one
+  subtree the agent can *write*. Without a deny ahead of that allow the model can truncate its own history
+  mid-session, and `read_file` on the db returns every other thread's transcript. The pattern is
+  `/workspace/checkpoints.db*` so SQLite's `-wal` and `-shm` sidecars are covered too. This was a real defect,
+  shipped and caught in review: the placement was reasoned about against git and not against the rule list.
+- **The approval gate must not fail open across processes.** A durable checkpointer lets an interrupt outlive
+  the run that raised it, but `interrupt_on` is only wired when `--require-approval` is passed — so resuming
+  such a thread without the flag would hand the graph a pending `save_draft` with no middleware left to stop
+  it. `main` checks `_pending_approvals` before sending any turn and exits 1 rather than proceeding. Draining
+  it from inside `_turn` alone is not enough: that runs *after* `_pump` has already sent the new message.
 - **Resuming replays the stored messages, so `_already_rendered` seeds the dedupe set.** `stream_mode="values"`
   re-emits the entire message list on every chunk and `main._pump` suppresses repeats with a `seen` set keyed
   on `message.id`. That set starts empty in a new process, so without seeding it from the checkpoint the whole

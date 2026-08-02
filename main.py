@@ -3,6 +3,7 @@
     uv run python main.py "Find 3-bed homes in Austin under $700k"
     uv run python main.py                      # interactive
     uv run python main.py --require-approval   # pause before saving drafts
+    uv run python main.py --thread <id>        # continue a checkpointed thread
 """
 
 from __future__ import annotations
@@ -42,11 +43,20 @@ def _render(message: BaseMessage) -> None:
         print(f"  \033[2m← {message.name}: {body}\033[0m")
 
 
+def _message_key(message: BaseMessage) -> str:
+    """Dedupe key for one message.
+
+    `_pump` and `_already_rendered` must agree on this exactly, or a resumed
+    thread reprints its whole transcript. One function so they cannot disagree.
+    """
+    return message.id or repr(message)
+
+
 def _pump(agent: Any, payload: Any, config: dict[str, Any], seen: set[str]) -> None:
     """Stream one turn, rendering each message exactly once."""
     for chunk in agent.stream(payload, config=config, stream_mode="values"):
         for message in _messages_of(chunk):
-            key = message.id or repr(message)
+            key = _message_key(message)
             if key in seen:
                 continue
             seen.add(key)
@@ -60,19 +70,29 @@ def _messages_of(chunk: Any) -> Iterable[BaseMessage]:
 
 
 def _already_rendered(agent: Any, config: dict[str, Any]) -> set[str]:
-    """Keys for messages a previous run already printed.
+    """Keys for every message already stored on this thread.
 
-    Only non-empty when `--thread` names a thread that exists in the
-    checkpoint database. Keyed exactly as `_pump` keys them, or the dedupe
-    misses and the transcript prints twice.
+    Only non-empty when `--thread` names a thread that exists in the checkpoint
+    database. Counts stored messages, not printed ones — `_render` stays silent
+    for HumanMessages and for empty assistant turns — which is why the banner
+    says "stored messages" rather than implying the reviewer saw that many.
     """
     state = agent.get_state(config)
     values = getattr(state, "values", None)
     if not isinstance(values, dict):
         return set()
-    return {
-        message.id or repr(message) for message in (values.get("messages") or [])
-    }
+    return {_message_key(message) for message in (values.get("messages") or [])}
+
+
+def _pending_approvals(agent: Any, config: dict[str, Any]) -> list[Any]:
+    """Interrupts this thread is currently paused on.
+
+    Non-empty means a previous run asked for approval and never got an answer.
+    Read from stored state rather than from a stream, so it is visible before
+    any new turn is sent.
+    """
+    state = agent.get_state(config)
+    return list(getattr(state, "interrupts", None) or [])
 
 
 def _prompt(text: str) -> str | None:
@@ -101,8 +121,7 @@ def _action_requests(interrupts: Any) -> list[dict[str, Any]]:
 def _handle_interrupts(agent: Any, config: dict[str, Any], seen: set[str]) -> None:
     """If the graph paused for approval, ask and resume until it runs clean."""
     while True:
-        state = agent.get_state(config)
-        interrupts = getattr(state, "interrupts", None) or []
+        interrupts = _pending_approvals(agent, config)
         if not interrupts:
             return
 
@@ -188,7 +207,23 @@ def main() -> int:
         # and say how much was picked up.
         seen: set[str] = _already_rendered(agent, config)
         if seen:
-            print(f"\033[2mresumed thread {thread_id} — {len(seen)} earlier messages\033[0m")
+            print(f"\033[2mresumed thread {thread_id} — {len(seen)} stored messages\033[0m")
+
+        # A durable checkpointer means an approval can outlive the process that
+        # asked for it, and the gate is only in the stack when the flag is set.
+        # Resuming such a thread without `--require-approval` would hand the
+        # graph a still-pending `save_draft` with no middleware left to stop it,
+        # so refuse rather than run it. Nothing here re-approves anything: the
+        # only two outcomes are "ask the reviewer now" or "do not proceed".
+        if _pending_approvals(agent, config):
+            if not args.require_approval:
+                print(
+                    f"\033[31mthread {thread_id} is paused awaiting approval. "
+                    "Re-run with --require-approval to answer it.\033[0m",
+                    file=sys.stderr,
+                )
+                return 1
+            _handle_interrupts(agent, config, seen)
 
         if args.prompt:
             _turn(agent, " ".join(args.prompt), config, seen)

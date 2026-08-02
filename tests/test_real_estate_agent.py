@@ -108,9 +108,16 @@ def test_every_advertised_filter_value_exists_in_the_dataset(
     tool = {t.name: t for t in make_listing_tools(provider)}["search_listings"]
     # The filter name is the parameter under test, so the call has to be built
     # dynamically; ty cannot match a computed keyword against the signature.
+    # status=None explicitly: the provider defaults to active-only, so the
+    # property_type leg would otherwise assert something narrower than its name
+    # and could fail for a reason that is not the advertised defect. Note this
+    # checks each value exists *somewhere*; a three-way combination such as
+    # city + status + property_type can still be empty in a 66-listing fixture,
+    # and no reasonable dataset size fixes that.
     search = cast(Any, provider.search)
     for value in _advertised_enum(tool, field):
-        assert search(**{field: value}, limit=500), (
+        assert search(**{field: value, "status": value if field == "status" else None},
+                      limit=500), (
             f"no listing with {field}={value!r}, but search_listings offers it"
         )
 
@@ -455,6 +462,16 @@ def _rules() -> list[FilesystemPermission]:
         ("write", "/.env", "deny"),
         ("read", "/.env", "deny"),
         ("read", "/skills/cma-analysis/SKILL.md", "allow"),
+        # The checkpoint store sits inside /workspace/ because that is
+        # gitignored, but /workspace/ is also the one subtree the agent can
+        # write. Without a deny ahead of that allow, the model can truncate its
+        # own history, and read_file on the db returns every other thread's
+        # transcript. The sidecars matter as much: clobbering -wal corrupts
+        # just as thoroughly as clobbering the db.
+        ("write", "/workspace/checkpoints.db", "deny"),
+        ("read", "/workspace/checkpoints.db", "deny"),
+        ("write", "/workspace/checkpoints.db-wal", "deny"),
+        ("write", "/workspace/checkpoints.db-shm", "deny"),
     ],
 )
 def test_permission_matrix(operation: str, path: str, expected: str) -> None:
@@ -556,6 +573,49 @@ def test_a_fresh_thread_has_nothing_to_replay(tmp_path, monkeypatch) -> None:
     with SqliteSaver.from_conn_string(str(tmp_path / "empty.db")) as saver:
         agent = build_agent(checkpointer=saver)
         assert main._already_rendered(agent, {"configurable": {"thread_id": "new"}}) == set()
+
+
+def test_cli_builds_with_a_durable_checkpointer() -> None:
+    """`build_agent`'s InMemorySaver default is right for tests, wrong for the CLI.
+
+    The two tests above construct their own SqliteSaver and pass it in, so they
+    pass even if `main.py` drops back to the default -- at which point `--thread`
+    silently resumes nothing again and the suite stays green. Asserted on source
+    text, the same idiom as `test_resume_payload_is_a_mapping_not_a_list`.
+    """
+    import inspect
+
+    import main
+
+    source = inspect.getsource(main.main)
+    assert "SqliteSaver.from_conn_string(str(CHECKPOINT_DB))" in source
+    assert "checkpointer=checkpointer" in source
+
+
+def test_resuming_a_pending_approval_without_the_flag_refuses() -> None:
+    """The gate must not fail open across processes.
+
+    With a durable checkpointer an approval outlives the process that asked for
+    it, but the gate is only in the middleware stack when `--require-approval`
+    is passed. Resuming such a thread without the flag would hand the graph a
+    still-pending `save_draft` and nothing left to stop it, so `main` refuses.
+
+    Asserted on source because reaching the real branch needs a graph paused
+    mid-tool-call, which needs a model call.
+    """
+    import inspect
+
+    import main
+
+    source = inspect.getsource(main.main)
+    assert "_pending_approvals(agent, config)" in source, (
+        "main must check for a stored interrupt before sending a new turn"
+    )
+    guard = source.split("_pending_approvals(agent, config)", 1)[1]
+    assert "if not args.require_approval:" in guard
+    assert "return 1" in guard.split("_handle_interrupts", 1)[0], (
+        "the no-flag path must exit non-zero rather than fall through to a turn"
+    )
 
 
 # --- agent wiring ---------------------------------------------------------
@@ -686,6 +746,37 @@ def test_check_script_pins_match_the_docs() -> None:
         assert _documented_pins(tool) == {_check_script_pin(tool)}, (
             f"scripts/check.sh runs a different {tool} than the docs document"
         )
+
+
+_RUN_STEP = re.compile(r"^\s*run:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def test_ci_calls_the_check_script_rather_than_restating_it() -> None:
+    """CI must not become a fourth place the pins live.
+
+    The workflow's whole argument is that `scripts/check.sh` decides what "done"
+    means, so `test_check_script_pins_match_the_docs` guards one file instead of
+    several. Inlining `uvx ruff check .` and `uv run pytest` as YAML steps while
+    debugging a red build is the obvious shortcut, and it drops both @0.16.1 and
+    --floor with every other test still green.
+
+    Checks only `run:` lines, because the rationale for calling the script is
+    written in the comments and would otherwise match.
+    """
+    workflow = PROJECT_ROOT / ".github" / "workflows" / "check.yml"
+    commands = _RUN_STEP.findall(workflow.read_text(encoding="utf-8"))
+
+    assert "scripts/check.sh --floor" in commands, (
+        "CI must run the script, with the floor leg -- that is the whole point"
+    )
+    assert "uv sync --locked" in commands, (
+        "--locked is the only check that uv.lock is current with pyproject.toml"
+    )
+    for command in commands:
+        for inlined in ("uvx", "pytest", "ruff", "ty@"):
+            assert inlined not in command, (
+                f"{inlined!r} is inlined in CI ({command!r}); call scripts/check.sh instead"
+            )
 
 
 def test_ty_fails_the_build_on_warnings() -> None:

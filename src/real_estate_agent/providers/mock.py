@@ -77,7 +77,7 @@ def _build_dataset() -> list[Listing]:
             # `comparables_with_diagnostics` still described `not_sold` as
             # covering "every active and pending listing". Widened so the status
             # the tool offers actually exists, and pinned by
-            # `test_every_advertised_status_exists_in_the_dataset` so a future
+            # `test_every_advertised_filter_value_exists_in_the_dataset` so a future
             # seed cannot quietly empty it again.
             roll = rng.random()
             if roll < 0.45:
