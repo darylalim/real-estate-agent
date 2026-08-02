@@ -773,6 +773,33 @@ def test_the_approval_form_shows_live_arguments_not_stored_ones() -> None:
     assert "st.code(" in source, "arguments are rendered with a stateless element"
 
 
+def test_the_approval_toggle_renders_before_anything_that_can_rerun() -> None:
+    """A safety gate must not switch itself off.
+
+    Streamlit drops a keyed widget's value on any run where the widget does not
+    render, and both sidebar controls call `st.rerun()` from inside the sidebar
+    block — which aborts the run before anything below them renders. With the
+    toggle declared last it never rendered on those runs, so `setdefault`
+    re-initialised it to False on the next one. Observed live: switch approval
+    on, click "New conversation", and the requirement was silently off again,
+    which would have let the next `save_draft` through unattended.
+
+    Order is the fix; `persist_state="session"` is the second line of defence.
+    """
+    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
+    # Comments name `st.rerun()` when explaining the rule, and a bare `.index`
+    # matches the prose ahead of the statement it is describing. Compare code.
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert code.index('key="require_approval"') < code.index("st.rerun()"), (
+        "the approval toggle must render before any st.rerun(), or its value is dropped"
+    )
+    assert 'persist_state="session"' in source, (
+        "keep the toggle's value across runs where it does not render"
+    )
+
+
 # --- toolchain configuration ----------------------------------------------
 #
 # "N tests, ty clean, ruff clean" is only a gate if "clean" cannot quietly

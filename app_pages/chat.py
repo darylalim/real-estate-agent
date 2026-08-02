@@ -65,6 +65,26 @@ st.session_state.setdefault("last_suggestion", None)
 
 with st.sidebar:
     st.subheader("Conversation")
+
+    # First in this block, and deliberately so. Streamlit discards a keyed
+    # widget's value on any run where the widget does not render, and both
+    # controls below call `st.rerun()` from inside this `with` — which aborts
+    # the run before anything after them renders. With the toggle placed last,
+    # clicking "New conversation" or loading a thread silently switched the
+    # approval requirement back off, and the next draft would have been written
+    # unattended. A safety gate that turns itself off is worse than no gate.
+    # `persist_state="session"` is the belt to that braces, so a later reorder
+    # cannot quietly reintroduce it.
+    st.toggle(
+        "Require approval for drafts",
+        key="require_approval",
+        persist_state="session",
+        help=(
+            "Pauses before `save_draft` writes anything, so a human decides. "
+            "Rebuilds the agent — the interrupt is part of the middleware stack."
+        ),
+    )
+
     st.caption("Thread id — pass this to `main.py --thread` to continue in the CLI.")
     st.code(st.session_state.thread_id, language=None, wrap_lines=True)
 
@@ -74,19 +94,18 @@ with st.sidebar:
         st.rerun()
 
     with st.expander("Resume a thread", icon=":material/history:"):
-        candidate = st.text_input("Thread id", key="thread_input", placeholder="8f2c1e04-…")
-        if st.button("Load", icon=":material/download:") and candidate.strip():
+        # A form, because a bare text_input commits its value on blur or Enter.
+        # Clicking a plain button next to one submits the *previous* value, so
+        # typing an id and clicking Load did nothing until you pressed Enter
+        # first -- a dead button with no error. A form commits the field and the
+        # submit together.
+        with st.form("resume", border=False):
+            candidate = st.text_input("Thread id", placeholder="8f2c1e04-…")
+            loaded = st.form_submit_button("Load", icon=":material/download:")
+        if loaded and candidate.strip():
             st.session_state.thread_id = candidate.strip()
+            st.session_state.last_suggestion = None
             st.rerun()
-
-    st.toggle(
-        "Require approval for drafts",
-        key="require_approval",
-        help=(
-            "Pauses before `save_draft` writes anything, so a human decides. "
-            "Rebuilds the agent — the interrupt is part of the middleware stack."
-        ),
-    )
 
     st.divider()
     st.subheader("Workspace")

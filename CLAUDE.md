@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 60 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 61 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -293,6 +293,17 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   new one — a reviewer approving text that was never going to be written. Found in a live run, where the form
   still showed a placeholder body after the specialist had redrafted with real figures. `st.code` holds no
   state; `test_the_approval_form_shows_live_arguments_not_stored_ones` forbids the key.
+- **The approval toggle must be declared before anything in the sidebar that calls `st.rerun()`.** Same
+  Streamlit rule, worse consequence: a keyed widget's value is dropped on any run where it does not render, and
+  `st.rerun()` inside the sidebar aborts the run before later widgets get there. With the toggle last, clicking
+  "New conversation" or loading a thread switched the approval requirement **off by itself**, and the next
+  `save_draft` would have gone through unattended. Order is the fix, `persist_state="session"` the second line
+  of defence, and `test_the_approval_toggle_renders_before_anything_that_can_rerun` pins both.
+
+**The Streamlit lesson behind all three:** widget state is keyed and lifecycle-bound. If a keyed widget does
+not render on a run its value is discarded; if it does render with the same key, the *stored* value wins over
+the `value=`/`default=` you passed. Neither is an error. Prefer stateless elements for anything you are only
+displaying, and render anything load-bearing before the first `st.rerun()`.
 
 ## Conventions
 

@@ -58,7 +58,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 60 tests, ~0.9s
+uv run pytest tests/ -q       # 61 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -200,13 +200,32 @@ The web UI was then run live against the same model, with approval switched on:
 | Approve | `.md` and `.eml` both written, `X-Unsent: 1` present, real listing data, and the model flagged the pending status rather than guessing whether the contract would close |
 | Workspace browser | Populated as specialists wrote; the checkpoint database stayed out of it |
 
-One defect it exposed, since fixed: **the approval form re-displayed the previous
-call's arguments.** `st.text_area(..., key=...)` stores its first value in
-session state and reuses it, so a second interrupt at the same index showed a
-stale payload while the decision applied to the live one — the form still showed
-a placeholder body after the specialist had redrafted with real figures. A
-reviewer would have approved text they never saw. Arguments now render with
-`st.code`, which holds no state.
+Three defects it exposed, since fixed and regression-tested. All three are the
+same Streamlit rule — **widget state is keyed and lifecycle-bound** — and none
+of them raised:
+
+- **The approval toggle switched itself off.** `st.rerun()` fires from inside
+  the sidebar, which aborts the run before any widget declared after it renders
+  — and Streamlit drops a keyed widget's value on a run where it does not
+  render. So switching approval on and then clicking "New conversation" left the
+  requirement off, and the next `save_draft` would have been written unattended.
+  The toggle is now declared first, with `persist_state="session"` behind it.
+- **The approval form re-displayed the previous call's arguments.**
+  `st.text_area(..., key=...)` stores its first value in session state and
+  reuses it, so a second interrupt at the same index showed a stale payload
+  while the decision applied to the live one — the form still showed a
+  placeholder body after the specialist had redrafted with real figures. A
+  reviewer would have approved text they never saw. Arguments now render with
+  `st.code`, which holds no state.
+- **"Resume a thread" had a dead button.** A bare `st.text_input` commits on
+  blur or Enter, so a plain button beside it submitted the *previous* value:
+  typing an id and clicking Load did nothing, silently, until you pressed Enter
+  first. Both now live in one `st.form`.
+
+Re-verified live afterwards, with the redraft loop that produced the second
+interrupt: an identical filename and subject with a changed body — the exact
+shape the stale-argument bug hid — displayed the new body, and the text written
+on approval matched the text on screen.
 
 Three defects the run exposed, since fixed:
 
