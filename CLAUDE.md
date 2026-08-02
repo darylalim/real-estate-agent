@@ -24,12 +24,12 @@ cp .env.example .env                             # then add ANTHROPIC_API_KEY
 uv run python main.py "Find 3-bed homes in Round Rock under $600k"
 uv run python main.py                            # interactive
 uv run python main.py --require-approval         # pause before save_draft
-uv run python main.py --thread <id>              # continue a conversation
+uv run python main.py --thread <id>              # continue a conversation (persisted to workspace/)
 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 44 tests, ~0.7s, no API calls
+uv run pytest tests/ -q                          # full suite: 48 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -57,9 +57,9 @@ are pre-1.0 and their diagnostics move fast; unpinned, "clean" can flip between 
 set — verified against 0.15.0. ty has no such setting, so its pin holds only for callers who go through
 `scripts/check.sh`; `uvx ty check` typed directly still resolves whatever is newest. That is a real gap, just
 a narrower one than before, and `test_check_script_pins_match_the_docs` at least stops the script and the docs
-disagreeing. There is still no CI here — the hooks in `.claude/` run on one machine only. Bump a pin
-deliberately, don't drop it. `pytest` is the only dev dependency, and `.gitignore` already ignores
-`.ruff_cache/` and `.ty_cache/`.
+disagreeing. CI now runs the same script on every push and PR, so the pin holds off this machine too — see
+below. Bump a pin deliberately, don't drop it. `pytest` is the only dev dependency, and `.gitignore` already
+ignores `.ruff_cache/` and `.ty_cache/`.
 
 **`ruff check` yes, `ruff format` no.** The formatter would rewrite 7 of the 14 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
@@ -99,21 +99,48 @@ an explicit node id — so the count is enforced by full-suite runs and by nothi
 one to keep in mind: without that skip, a filtered run fails the test, which puts it in the last-failed set,
 which makes the next `--lf` collect only it. That is a red `--lf` no code change clears.
 
+## CI
+
+`.github/workflows/check.yml`, one job on `ubuntu-latest`, triggered by push to `main`, any PR, and
+`workflow_dispatch`. It **calls `scripts/check.sh --floor`** rather than re-listing ruff, ty and pytest as
+YAML steps — spelling them out would make the workflow a fourth home for the pins, and the one home
+`test_check_script_pins_match_the_docs` does not read. Change what CI runs by changing the script.
+
+Three things it buys that nothing else here does:
+
+- **A machine that is not yours.** The `.claude/` hooks below run on one laptop; a clone gets none of them.
+- **Linux, and a clean checkout.** Development is macOS with a warm `.venv`.
+- **`uv sync --locked`.** It fails rather than re-resolving, so this is the only check anywhere that
+  `uv.lock` is still current with `pyproject.toml`. `uv run` inside `check.sh` syncs too, but silently.
+
+`--floor` is on in CI and opt-in locally: the 3.11 leg costs a resolve you don't want on every Stop hook, and
+running it somewhere is most of the reason to have a second machine.
+
+No secrets, by construction. The suite is offline and the one test that builds the real graph injects its own
+dummy `ANTHROPIC_API_KEY`, so `permissions: contents: read` is enough — don't add a key to make some future
+live test possible without re-reading that decision. Actions are pinned by commit sha with the tag in a
+trailing comment; bump both halves together.
+
 ## The hooks in `.claude/`
 
 Five hooks, checked in, active only inside Claude Code. They are **local convenience, not a gate anyone else
 inherits** — a clone without Claude Code gets none of them, which is why the enforcement that matters lives in
-`pyproject.toml`, `scripts/check.sh`, and `tests/`.
+`pyproject.toml`, `scripts/check.sh`, `tests/`, and now CI.
 
 | Hook | Event | Does |
 |---|---|---|
 | `session-start.sh` | SessionStart | Records the starting commit, so the Stop gate can see work committed mid-turn |
 | `static-gate.sh` | PostToolUse(Edit\|Write) | ruff + ty on `.py` edits, 0.12s |
 | `protect-files.sh` | PreToolUse | Denies `.env` and `uv.lock` via Edit/Write/NotebookEdit, and `.env` reads via Bash |
-| `confirm-live-run.sh` | PreToolUse(Bash) | Asks before `main.py`, the only command here that spends money |
+| `confirm-live-run.sh` | PreToolUse | Asks before `main.py`, the only command here that spends money |
 | `done-gate.sh` | Stop | `scripts/check.sh` always; the 3.11 floor leg when Python changed |
 
-Four things about them worth knowing before editing:
+Both `PreToolUse` hooks share one registration in `.claude/settings.json` — a single
+`"matcher": "Edit|Write|NotebookEdit|Bash"` block listing both scripts — so `confirm-live-run.sh` is invoked on
+Edit and Write too, not just Bash. It exits 0 when there is no command to inspect, so this costs nothing, but
+don't read the table above as saying each hook sees only the tools it cares about.
+
+Four more things worth knowing before editing:
 
 - **`done-gate.sh` runs `check.sh` unconditionally.** It used to gate on a changed `*.py`, which skipped the
   suite on exactly the edits the toolchain tests exist to catch — a `pyproject.toml` that drops
@@ -190,6 +217,18 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   recency filter read it, so they cannot drift and silently disable the close-date screen. Changing it, or the
   square-footage sigma, shifts comp availability — `test_most_listings_have_a_usable_comp_set` asserts ≥60% of
   active listings clear the 3-comp minimum.
+- **`main.py` must pass a checkpointer explicitly; the `build_agent` default is per-process.** `build_agent`
+  falls back to `InMemorySaver()`, which is right for tests and wrong for the CLI — with it, `--thread <id>`
+  resumed nothing across runs and the only symptom was a printed id that looked like it meant something.
+  `main.py` now opens `SqliteSaver.from_conn_string(CHECKPOINT_DB)` for the whole session. Two consequences:
+  the `with` block must wrap every `_turn`, because the connection closes on exit; and `ensure_workspace()`
+  has to run *before* it, since `from_conn_string` will not create the parent directory. `CHECKPOINT_DB`
+  lives under `workspace/` because that is gitignored, and a checkpoint file holds the full transcript.
+- **Resuming replays the stored messages, so `_already_rendered` seeds the dedupe set.** `stream_mode="values"`
+  re-emits the entire message list on every chunk and `main._pump` suppresses repeats with a `seen` set keyed
+  on `message.id`. That set starts empty in a new process, so without seeding it from the checkpoint the whole
+  prior transcript reprints before the new turn. It must key messages **exactly** as `_pump` does
+  (`message.id or repr(message)`) or the dedupe misses. `test_a_thread_survives_a_rebuild` pins both halves.
 - **The approval-gate resume payload is a mapping, not a list:** `Command(resume={"decisions": [...]})`, with
   exactly one decision per pending tool call. The gate **fails closed** — exhausted or absent stdin rejects.
   `test_resume_payload_is_a_mapping_not_a_list` asserts on the *source text* of `main._handle_interrupts`, so

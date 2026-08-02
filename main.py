@@ -14,10 +14,11 @@ from collections.abc import Iterable
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from real_estate_agent import build_agent
-from real_estate_agent.config import require_api_key
+from real_estate_agent.config import CHECKPOINT_DB, ensure_workspace, require_api_key
 
 _TOOL_RESULT_PREVIEW = 400
 
@@ -56,6 +57,22 @@ def _messages_of(chunk: Any) -> Iterable[BaseMessage]:
     if isinstance(chunk, dict):
         return chunk.get("messages") or []
     return []
+
+
+def _already_rendered(agent: Any, config: dict[str, Any]) -> set[str]:
+    """Keys for messages a previous run already printed.
+
+    Only non-empty when `--thread` names a thread that exists in the
+    checkpoint database. Keyed exactly as `_pump` keys them, or the dedupe
+    misses and the transcript prints twice.
+    """
+    state = agent.get_state(config)
+    values = getattr(state, "values", None)
+    if not isinstance(values, dict):
+        return set()
+    return {
+        message.id or repr(message) for message in (values.get("messages") or [])
+    }
 
 
 def _prompt(text: str) -> str | None:
@@ -153,29 +170,44 @@ def main() -> int:
         print(f"\033[31m{exc}\033[0m", file=sys.stderr)
         return 1
 
-    agent = build_agent(require_approval=args.require_approval)
-    thread_id = args.thread or str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-    seen: set[str] = set()
+    # The checkpointer has to be durable for `--thread` to mean anything: the
+    # InMemorySaver `build_agent` falls back to is per-process, so resuming an
+    # id from a previous run would silently start an empty conversation.
+    # `ensure_workspace` first — `from_conn_string` will not create the parent.
+    ensure_workspace()
+    with SqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as checkpointer:
+        agent = build_agent(
+            require_approval=args.require_approval, checkpointer=checkpointer
+        )
+        thread_id = args.thread or str(uuid.uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
 
-    if args.prompt:
-        _turn(agent, " ".join(args.prompt), config, seen)
-        print(f"\n\033[2mthread: {thread_id}\033[0m")
-        return 0
+        # Resuming replays the stored messages through `stream_mode="values"`,
+        # and `seen` starts empty in a new process — so without this the whole
+        # prior transcript reprints before the new turn. Mark it seen instead
+        # and say how much was picked up.
+        seen: set[str] = _already_rendered(agent, config)
+        if seen:
+            print(f"\033[2mresumed thread {thread_id} — {len(seen)} earlier messages\033[0m")
 
-    print("Real estate agent. Ctrl-D or 'exit' to quit.")
-    print(f"\033[2mthread: {thread_id}\033[0m")
-    while True:
-        try:
-            text = input("\n\033[1myou\033[0m ▸ ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
+        if args.prompt:
+            _turn(agent, " ".join(args.prompt), config, seen)
+            print(f"\n\033[2mthread: {thread_id}\033[0m")
             return 0
-        if text.lower() in {"exit", "quit"}:
-            return 0
-        if not text:
-            continue
-        _turn(agent, text, config, seen)
+
+        print("Real estate agent. Ctrl-D or 'exit' to quit.")
+        print(f"\033[2mthread: {thread_id}\033[0m")
+        while True:
+            try:
+                text = input("\n\033[1myou\033[0m ▸ ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if text.lower() in {"exit", "quit"}:
+                return 0
+            if not text:
+                continue
+            _turn(agent, text, config, seen)
 
 
 if __name__ == "__main__":

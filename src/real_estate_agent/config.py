@@ -25,6 +25,11 @@ DRAFTS_DIR = WORKSPACE_DIR / "drafts"
 DOCUMENTS_DIR = WORKSPACE_DIR / "documents"
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
+# Conversation state, so `--thread <id>` survives the process that created it.
+# Inside WORKSPACE_DIR because that is already gitignored — a checkpoint file
+# holds the full transcript, which is the last thing to commit by accident.
+CHECKPOINT_DB = WORKSPACE_DIR / "checkpoints.db"
+
 # LangChain resolves "provider:model" strings through init_chat_model, so the
 # prefix is required — a bare "claude-opus-5" will not resolve.
 DEFAULT_MODEL = os.getenv("REA_MODEL", "anthropic:claude-opus-5")

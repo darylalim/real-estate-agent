@@ -1,0 +1,65 @@
+# The definition of done, on a machine that is not yours.
+#
+# This job calls `scripts/check.sh` instead of re-listing ruff, ty and pytest as
+# YAML steps. That is deliberate: the script is where the pins are enforced
+# rather than described, and its own header already names CI as a caller.
+# Spelling the tools out here would make this a fourth place the versions live —
+# one that `test_check_script_pins_match_the_docs` does not read and therefore
+# cannot stop drifting.
+#
+# What CI adds over the `.claude/` hooks: those are one machine's convenience
+# and a clone without Claude Code inherits none of them. This runs on a clean
+# checkout, on Linux, on every push and PR.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only, and no secrets: the suite is entirely offline. The one test that
+# builds the real graph (`test_agent_exposes_planning_and_delegation`) injects a
+# dummy ANTHROPIC_API_KEY itself, so there is nothing here worth stealing.
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Actions are pinned by commit sha, not by tag: a tag is mutable and these
+      # run with a token in scope. The trailing comment is the human-readable
+      # half — keep them in step when bumping.
+      #
+      # No actions/setup-python. uv reads .python-version and fetches 3.14
+      # itself, exactly as it does locally, and it is also what fetches 3.11 for
+      # the floor leg below. Two ways to acquire an interpreter is one too many,
+      # and the second one would not be the way anybody actually runs this.
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      # --locked fails rather than quietly re-resolving, which makes this the
+      # only check anywhere that uv.lock is still current with pyproject.toml.
+      # `uv run` inside check.sh would sync too, but silently and without that
+      # guarantee.
+      - name: Sync
+        run: uv sync --locked
+
+      # --floor adds the `requires-python = ">=3.11"` leg. Locally that is
+      # opt-in because it costs a resolve; here it is most of the point of
+      # having a second machine at all. check.sh accumulates a status instead of
+      # exiting early, so a failing run reports every broken leg, not just the
+      # first.
+      - name: scripts/check.sh --floor
+        run: scripts/check.sh --floor

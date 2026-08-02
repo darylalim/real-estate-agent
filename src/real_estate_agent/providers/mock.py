@@ -67,6 +67,18 @@ def _build_dataset() -> list[Listing]:
 
             # Just under half of inventory is recent sold comps, so CMAs have
             # something to work with at the default 6-month window.
+            #
+            # The pending band is 0.45-0.58 rather than the 0.45-0.50 it started
+            # as, because a 5% band over 66 draws has a ~3.4% chance of never
+            # firing and at seed 1337 that is exactly what happened: zero
+            # pending listings, while `search_listings` went on advertising
+            # `status="pending"` as a filter that returns an empty market.
+            # Nothing failed — the branch was simply unreachable data, and
+            # `comparables_with_diagnostics` still described `not_sold` as
+            # covering "every active and pending listing". Widened so the status
+            # the tool offers actually exists, and pinned by
+            # `test_every_advertised_status_exists_in_the_dataset` so a future
+            # seed cannot quietly empty it again.
             roll = rng.random()
             if roll < 0.45:
                 status = "sold"
@@ -74,7 +86,7 @@ def _build_dataset() -> list[Listing]:
                 sold_date = today - timedelta(days=days_back)
                 sold_price = int(round(price * rng.uniform(0.94, 1.03), -3))
                 days_on_market = rng.randint(4, 95)
-            elif roll < 0.5:
+            elif roll < 0.58:
                 status = "pending"
                 sold_date, sold_price = None, None
                 days_on_market = rng.randint(3, 40)

@@ -26,6 +26,7 @@ from real_estate_agent.providers import MockListingsProvider
 from real_estate_agent.tools import comms, documents
 from real_estate_agent.tools.comms import make_comms_tools
 from real_estate_agent.tools.documents import make_document_tools
+from real_estate_agent.tools.listings import make_listing_tools
 from real_estate_agent.tools.market import make_market_tools
 
 
@@ -72,6 +73,46 @@ def test_dataset_is_deterministic() -> None:
     second = [listing.as_dict() for listing in MockListingsProvider().search(limit=500)]
     assert first == second
     assert first, "dataset should not be empty"
+
+
+def _advertised_enum(tool: BaseTool, field: str) -> list[str]:
+    """The values `search_listings` offers the model for ``field``.
+
+    Read from the generated JSON schema rather than the Python annotation,
+    because the schema is the thing the model is actually shown. `X | None`
+    renders as an `anyOf` of the enum and null.
+    """
+    schema = cast(Any, tool.args_schema).model_json_schema()
+    for branch in schema["properties"][field]["anyOf"]:
+        if "enum" in branch:
+            return branch["enum"]
+    raise AssertionError(f"{field} is no longer an enum in the tool schema")
+
+
+@pytest.mark.parametrize("field", ["status", "property_type"])
+def test_every_advertised_filter_value_exists_in_the_dataset(
+    provider: MockListingsProvider, field: str
+) -> None:
+    """A filter value the tool offers but the data never holds reads as a dead market.
+
+    `search_listings` enumerates status as active/pending/sold, so the model can
+    and will filter on any of them. At seed 1337 the original 0.45-0.50 pending
+    band never fired — 40 active, 26 sold, 0 pending — so `status="pending"`
+    returned an empty list forever. Nothing raised; the tool simply described a
+    market with no homes under contract, which is a market signal the analyst
+    would have reported.
+
+    Asserted against the tool's own schema rather than a copied list, so adding
+    a value to either Literal without adding data fails here.
+    """
+    tool = {t.name: t for t in make_listing_tools(provider)}["search_listings"]
+    # The filter name is the parameter under test, so the call has to be built
+    # dynamically; ty cannot match a computed keyword against the signature.
+    search = cast(Any, provider.search)
+    for value in _advertised_enum(tool, field):
+        assert search(**{field: value}, limit=500), (
+            f"no listing with {field}={value!r}, but search_listings offers it"
+        )
 
 
 def test_search_respects_filters(provider: MockListingsProvider) -> None:
@@ -266,7 +307,7 @@ def test_lot_size_is_never_negative(provider: MockListingsProvider) -> None:
 def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall(
     provider: MockListingsProvider,
 ) -> None:
-    """Regression: a $2M budget in a $683k market was reported as clearing 8%."""
+    """Regression: a $2M budget in a sub-$800k market was reported as clearing 8%."""
     tools = {tool.name: tool for tool in make_comms_tools(provider)}
     payload = json.loads(
         tools["qualify_lead"].invoke(
@@ -463,6 +504,58 @@ def test_resume_payload_is_a_mapping_not_a_list() -> None:
     source = inspect.getsource(main._handle_interrupts)
     assert 'Command(resume={"decisions": decisions})' in source
     assert "Command(resume=decisions)" not in source
+
+
+def test_a_thread_survives_a_rebuild(tmp_path, monkeypatch) -> None:
+    """`--thread <id>` has to outlive the process, or the flag is decoration.
+
+    `build_agent` falls back to `InMemorySaver`, and for a long time `main.py`
+    took that default — so resuming an id from an earlier run silently started
+    an empty conversation and only the printed id suggested otherwise. Two
+    separate savers over one file is exactly what two runs of the CLI do.
+
+    Also pins `_already_rendered`: on resume the stored messages replay through
+    `stream_mode="values"`, and anything it fails to key is printed a second
+    time.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    from langchain_core.messages import HumanMessage
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    import main
+    from real_estate_agent.agent import build_agent
+
+    db = tmp_path / "checkpoints.db"
+    config = {"configurable": {"thread_id": "thread-under-test"}}
+
+    with SqliteSaver.from_conn_string(str(db)) as saver:
+        agent = build_agent(checkpointer=saver)
+        agent.update_state(
+            config, {"messages": [HumanMessage("an earlier turn", id="msg-1")]}
+        )
+
+    with SqliteSaver.from_conn_string(str(db)) as saver:
+        rebuilt = build_agent(checkpointer=saver)
+        stored = rebuilt.get_state(config).values["messages"]
+        assert [message.content for message in stored] == ["an earlier turn"]
+        assert main._already_rendered(rebuilt, config) == {"msg-1"}
+
+
+def test_a_fresh_thread_has_nothing_to_replay(tmp_path, monkeypatch) -> None:
+    """`_already_rendered` must be empty for an unknown id, not raise.
+
+    Every run without `--thread` takes this path, so a getattr slip here breaks
+    the common case rather than the resume case.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    import main
+    from real_estate_agent.agent import build_agent
+
+    with SqliteSaver.from_conn_string(str(tmp_path / "empty.db")) as saver:
+        agent = build_agent(checkpointer=saver)
+        assert main._already_rendered(agent, {"configurable": {"thread_id": "new"}}) == set()
 
 
 # --- agent wiring ---------------------------------------------------------

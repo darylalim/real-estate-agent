@@ -67,7 +67,10 @@ def make_document_tools() -> list[BaseTool]:
     def extract_document_text(filename: str, max_pages: int = 40) -> str:
         """Extract readable text from a document in the documents directory.
 
-        Supports PDF (.pdf) and plain text (.txt, .md, .csv). For PDFs the text
+        Supports PDF (.pdf) and plain text (.txt, .md, .markdown, .csv). Keep
+        this list in step with `_TEXT_SUFFIXES` and `_PDF_SUFFIXES` above — a
+        docstring is prompt surface, so an extension missing here is one the
+        model believes it cannot read. For PDFs the text
         is returned page by page with page markers so you can cite locations
         precisely when flagging a clause.
 

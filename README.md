@@ -1,5 +1,7 @@
 # real-estate-agent
 
+[![check](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml/badge.svg)](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml)
+
 Real estate agent on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview).
 
 An orchestrator that delegates to four specialists — property search, market
@@ -20,6 +22,13 @@ Interactive mode:
 uv run python main.py
 ```
 
+Conversations are checkpointed to `workspace/checkpoints.db`, so a thread can be
+picked up in a later run. Every invocation prints its thread id:
+
+```bash
+uv run python main.py --thread 8f2c1e04-...   # continue where you left off
+```
+
 Checks — all three must pass. No API calls, no key required:
 
 ```bash
@@ -29,7 +38,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 44 tests, ~0.7s
+uv run pytest tests/ -q       # 48 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -46,12 +55,18 @@ each is pre-1.0, so an unpinned run can report a different result on identical s
 pin via `required-version` and will refuse to run if you drop it; ty has no equivalent, so that one is on you.
 `ruff format` is deliberately **not** used here — see `CLAUDE.md`.
 
+CI (`.github/workflows/check.yml`) runs `scripts/check.sh --floor` on Linux for every push and PR, plus
+`uv sync --locked` so a stale `uv.lock` fails the build. It calls the script rather than restating the tools,
+which is the point of having the script: one place decides what "done" means. No secrets — the suite is
+entirely offline.
+
 ## Architecture
 
 ```
 orchestrator  (write_todos + task)
 ├── property-search    search_listings, get_listing
-├── market-analyst     find_comparables, market_statistics    → skills/cma-analysis
+├── market-analyst     find_comparables, market_statistics,
+│                      search_listings, get_listing           → skills/cma-analysis
 ├── document-reviewer  list_documents, extract_document_text  → skills/document-review
 └── client-liaison     qualify_lead, save_draft               → skills/client-comms
 ```
@@ -60,6 +75,11 @@ The orchestrator holds no domain tools. It plans with `write_todos`, delegates
 with `task`, and synthesises what comes back. Specialists share the filesystem
 but not each other's context, so a long document review can't crowd out the
 shortlist the buyer agent is maintaining.
+
+market-analyst is the only specialist with two tool groups (`subagents.py`
+passes it `market_tools + listing_tools`), so it can look up a subject property
+itself instead of round-tripping through the orchestrator for an id it was
+already given.
 
 | Path | Purpose |
 |---|---|
@@ -86,7 +106,7 @@ agent = build_agent(provider=MyMlsProvider(api_key=...))
 ```
 
 The mock models two deliberately different markets (Austin 78704/78745 at
-$529k–$1.4M, Round Rock at $210k–$683k) so budget-feasibility logic has
+$504k–$1.51M, Round Rock at $264k–$777k) so budget-feasibility logic has
 something real to bite on.
 
 ## Skills vs. prompts
@@ -114,7 +134,8 @@ declares it explicitly in `subagents.py`.
   A human still reads the text and presses send — which keeps accountability
   with the licensed person, where fair-housing and agency law put it.
   If you later add real delivery, gate it: `build_agent(require_approval=True)`
-  pauses `save_draft` for approval (the checkpointer is on by default).
+  pauses `save_draft` for approval. The CLI's checkpointer is durable, so a
+  pending approval survives the process — reject is not the same as walking away.
 - **Path traversal.** Document filenames come from model output, so they are
   resolved and confined to the documents directory before any read.
 - **No shell.** The `execute` tool appears in the tool list but errors out —
@@ -155,7 +176,7 @@ Three defects the run exposed, since fixed:
   thin market.
 - The mock spread square footage too widely for a 66-listing dataset, so small
   properties had no size-matched comps and no CMA was possible. Sizes now
-  cluster; 32 of 40 active listings clear the 3-comp minimum, and a couple of
+  cluster; 28 of 35 active listings clear the 3-comp minimum, and a couple of
   genuine outliers remain so the insufficient-comps path stays reachable.
 - client-liaison had two ways to write a draft and used both, producing
   divergent copies. `save_draft` is now the only sanctioned path.
@@ -172,7 +193,7 @@ A later code review found more, since fixed and regression-tested:
   reading from balanced to extreme buyer's market. The window is now applied to
   the sales themselves, via a `sold_within_months` provider filter.
 - **`qualify_lead` blamed the budget for a bedroom shortfall**, reporting a $2M
-  budget in a $683k market as clearing "only 8% of inventory". Budget share is
+  budget in a sub-$800k market as clearing "only 8% of inventory". Budget share is
   now measured against listings that already meet the non-price requirements.
 - **`status="Active"` returned zero listings** — string filters were
   case-sensitive, which reads to the agent as an empty market. Now
