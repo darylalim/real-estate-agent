@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 59 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 60 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -287,6 +287,12 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   with the sidebar toggle off would hand the graph a pending call with no middleware left to stop it, so the
   page refuses to send rather than proceeding, and any decision that is not an explicit "Approve" — including a
   deselected control — is a reject.
+- **The approval form must render its arguments with a *stateless* element.** Keyed widgets persist: an
+  `st.text_area(..., key=f"arg_{i}_{name}")` writes its first value into `session_state` and reuses it, so a
+  second interrupt at the same index showed the **previous** call's arguments while the decision applied to the
+  new one — a reviewer approving text that was never going to be written. Found in a live run, where the form
+  still showed a placeholder body after the specialist had redrafted with real figures. `st.code` holds no
+  state; `test_the_approval_form_shows_live_arguments_not_stored_ones` forbids the key.
 
 ## Conventions
 

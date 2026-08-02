@@ -58,7 +58,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 59 tests, ~0.9s
+uv run pytest tests/ -q       # 60 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -188,6 +188,25 @@ Run live against `anthropic:claude-opus-5`, traces in LangSmith:
 | Write containment | `permission denied` on `/src/notes.md`; nothing written outside `workspace/` |
 | Fair-housing guardrail | Refused "family-friendly", "young professionals", "safe neighborhood", "good schools" with the legal basis for each, and supplied compliant copy |
 | Approval gate, both directions | Approve writes the draft; reject blocks it; exhausted/absent input **fails closed** rather than crashing or approving |
+
+The web UI was then run live against the same model, with approval switched on:
+
+| Check | Result |
+|---|---|
+| Streaming and dedupe | Tool calls and results render as they arrive; no message printed twice |
+| Delegation | `task(subagent_type=client-liaison)` from the orchestrator, never answered inline |
+| Reject | Rejection reached the specialist; nothing written to `drafts/`; the orchestrator re-planned from the stated reason — `write_todos`, then `task(property-search)` with "Do not estimate or infer anything" |
+| Cross-specialist handoff | property-search wrote `/workspace/documents/mls-1022-facts.md`; the orchestrator pointed client-liaison at that path, and it drafted from the real figures |
+| Approve | `.md` and `.eml` both written, `X-Unsent: 1` present, real listing data, and the model flagged the pending status rather than guessing whether the contract would close |
+| Workspace browser | Populated as specialists wrote; the checkpoint database stayed out of it |
+
+One defect it exposed, since fixed: **the approval form re-displayed the previous
+call's arguments.** `st.text_area(..., key=...)` stores its first value in
+session state and reuses it, so a second interrupt at the same index showed a
+stale payload while the decision applied to the live one — the form still showed
+a placeholder body after the specialist had redrafted with real figures. A
+reviewer would have approved text they never saw. Arguments now render with
+`st.code`, which holds no state.
 
 Three defects the run exposed, since fixed:
 

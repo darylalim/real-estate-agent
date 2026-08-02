@@ -754,6 +754,25 @@ def test_the_chat_page_refuses_a_thread_paused_without_the_gate() -> None:
     )
 
 
+def test_the_approval_form_shows_live_arguments_not_stored_ones() -> None:
+    """A reviewer has to see the call they are actually approving.
+
+    Keyed widgets persist. `st.text_area(..., key=f"arg_{i}_{name}")` writes its
+    first value into session_state and reuses it from then on, so a second
+    interrupt at the same index re-displayed the *previous* call's arguments
+    while the decision applied to the new one. Found in a live run: the form
+    still showed a placeholder body after the specialist had already redrafted
+    with real figures, so approving would have written text the reviewer never
+    saw. The fix is to render arguments with a stateless element, which is what
+    this asserts — no widget key may be derived from an argument name.
+    """
+    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
+    assert 'key=f"arg_' not in source, (
+        "argument display must not be a keyed widget — it will show a stale payload"
+    )
+    assert "st.code(" in source, "arguments are rendered with a stateless element"
+
+
 # --- toolchain configuration ----------------------------------------------
 #
 # "N tests, ty clean, ruff clean" is only a gate if "clean" cannot quietly

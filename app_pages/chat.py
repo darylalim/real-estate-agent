@@ -148,12 +148,21 @@ if actions:
     with st.form("approval"):
         for index, action in enumerate(actions):
             st.markdown(f"**{index + 1} of {len(actions)} · `{action.get('name')}`**")
+            # Deliberately not widgets. A keyed st.text_area writes its first
+            # value into session_state and reuses it from then on, so a second
+            # interrupt at the same index re-displayed the *previous* call's
+            # arguments while the decision applied to the new one -- a reviewer
+            # approving text that was not what would be written. Observed live:
+            # the form still showed a placeholder body after the specialist had
+            # already redrafted with real figures. st.code holds no state.
             for name, value in (action.get("args") or {}).items():
-                st.text_area(
-                    name,
-                    value=str(value),
-                    disabled=True,
-                    key=f"arg_{index}_{name}",
+                rendered = str(value)
+                st.caption(name)
+                st.code(
+                    rendered,
+                    language=None,
+                    wrap_lines=True,
+                    height=220 if len(rendered) > 400 else "content",
                 )
             st.segmented_control(
                 "Decision",
