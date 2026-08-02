@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 66 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 67 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -208,13 +208,14 @@ property-search workflow is not.
 `streamlit_app.py` (a two-page `st.navigation`), `app_pages/chat.py`, `app_pages/market.py`, `ui/`, and
 `.streamlit/config.toml`.
 
-**All four live outside `src/real_estate_agent/`, deliberately.** The package exposes `build_agent` through a
+**All of these live outside `src/real_estate_agent/`, deliberately.** The package exposes `build_agent` through a
 lazy `__getattr__` so importing a provider does not drag in LangChain; putting Streamlit imports inside it
 would undo that for every consumer, the CLI included. The app is a consumer of the package exactly as
 `main.py` is — which also means `pythonpath = ["."]` is what lets `tests/` reach `ui/`, the same line that
 already lets it reach `main.py`.
 
-Three things that are not obvious:
+What is not obvious (both counts here used to be written out, and both went stale the first time the list
+grew — in a file three tests exist to keep honest, don't reintroduce them):
 
 - **The checkpointer is built differently here.** `main.py` uses
   `with SqliteSaver.from_conn_string(...)`, which closes the connection on exit. A Streamlit script reruns top
@@ -241,17 +242,23 @@ Three things that are not obvious:
   viewers, but a widget outside a fragment reruns the whole script — which on this page means
   `thread_snapshot` (the checkpointer's lock, plus deserialising every message) and a full transcript
   re-render, to answer a question about a file. A fragment confines that to itself. Two constraints come
-  with it: the fragment must be *called* after the sidebar has already been written to, or Streamlit has no
-  container to redraw into; and its docstring must not contain the literal `st.rerun()`, because
-  `test_the_approval_toggle_renders_before_anything_that_can_rerun` compares source positions and the
-  fragment is defined above the toggle. The turn-end rerun is app-scoped and reruns fragments too, so the
-  "a turn always re-runs the page" invariant above still holds.
-- **Theming is `.streamlit/config.toml`, and it defines *both* modes.** The skill's twelve bundled theme
-  templates each ship a single `[theme]` block, and a custom theme with only `[theme]` removes the
-  light/dark switch from the settings menu — silently, with nothing raising. The config here keeps shared
-  typography and shape in `[theme]` and puts colour in `[theme.light]` / `[theme.dark]` (plus their
-  `.sidebar` sub-tables), so the switch survives. No CSS anywhere; `st.markdown(unsafe_allow_html=True)`
-  and `st.html` are not how this app is styled.
+  with it: the fragment must be *called* inside the `with st.sidebar:` block and after that block's first
+  write, or Streamlit has no container to redraw into. The turn-end rerun is app-scoped and reruns fragments
+  too, so the "a turn always re-runs the page" invariant above still holds.
+- **Theming is `.streamlit/config.toml`, and a misplaced key there is *discarded*, not rejected.** Three
+  traps, all silent, all hit on the first attempt:
+  - A custom theme with only `[theme]` removes the light/dark switch from the settings menu. Every one of
+    the skill's twelve bundled templates ships exactly that, so starting from one costs you the switch.
+    Colour lives in `[theme.light]` / `[theme.dark]` here (plus their `.sidebar` sub-tables).
+  - **`chartCategoricalColors` is registered at `[theme]` only.** Under `[theme.light]` it logs "not a
+    valid config option" to stderr and is dropped — the app starts, looks styled, and charts fall back to
+    the built-in palette. So the chart palette **cannot** differ between modes; the one in the file is
+    picked to clear 3:1 on both backgrounds. `test_every_theme_setting_is_a_real_config_option` asks
+    `st.get_option` about every leaf key rather than keeping a second list of what is valid.
+  - **Heading sizes set in `[theme]` are not inherited by the sidebar** — Streamlit's own option
+    description says so. `[theme.sidebar]` restates them.
+
+  No CSS anywhere; `st.markdown(unsafe_allow_html=True)` and `st.html` are not how this app is styled.
 - **`market.py` drops columns before `st.dataframe`, rather than hiding them with `column_config`.**
   `{name: None}` hides a column in the browser and still serialises every value into the payload. Note the
   trade: `frame.drop(columns=...)` raises `KeyError` on a name that is not there, so `_NOT_IN_THE_TABLE` is
@@ -314,8 +321,17 @@ of the file" and the test keeps passing on evidence from somewhere else entirely
 to `test_the_chat_page_refuses_a_thread_paused_without_the_gate`: its bound was `history = stored_messages`,
 which left the page when the two checkpoint reads were consolidated into `thread_snapshot`, and from then on the
 approval form's own `st.stop()` satisfied a test about the fail-closed guard. Measured: deleting the guard's
-`st.stop()` outright left it green. **Prefer `ast` over a bounded `split` for anything asserting that a
-statement is inside a particular block** — a tree has no bound to go stale.
+`st.stop()` outright left it green. **Prefer `ast` over source text for anything asserting where a statement
+sits** — a tree has no bound to go stale, and cannot mistake prose for code.
+
+That second half is not hypothetical either. `test_the_approval_toggle_renders_before_anything_that_can_rerun`
+compared the position of `key="require_approval"` against the first `st.rerun()` in a copy of the source with
+whole-line comments stripped — and nothing else. Docstrings and trailing comments stayed in, so *writing about*
+a rerun above the toggle turned it red with no behavioural change. That happened the moment `_workspace_browser`
+was added above the toggle with an accurate docstring, and the workaround was a rule in this file telling humans
+what they were not allowed to write. The tree version has no opinion about prose, and the rule is gone.
+`test_the_workspace_browser_is_a_fragment` went the same way: `"@st.fragment" in source` would have passed with
+the decorator on any function in the file, so it now reads the `decorator_list` of the one that matters.
 
 Both fail-closed gate tests read the tree now, through one shared `_sole_guard(scope, *words)` helper: it finds
 the single `if` under `scope` whose condition mentions every one of `words`, matching on *identifiers* rather

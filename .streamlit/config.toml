@@ -9,13 +9,27 @@
 # regression the template does not intend, so the light half is authored here
 # from the same slate/blue family.
 #
-# Shared shape and typography live in `[theme]`; each mode overrides only colour.
+# Colour is per-mode; everything else is shared, with two exceptions Streamlit
+# imposes and one it does not:
+#
+#   - `chartCategoricalColors` is registered at `[theme]` only. Declaring it
+#     under `[theme.light]` / `[theme.dark]` is not an error, it is a *discard*:
+#     Streamlit logs "not a valid config option" to stderr, `st.get_option`
+#     raises, and the charts silently fall back to the built-in palette. So the
+#     chart palette cannot differ between modes, and the one below is chosen to
+#     work on both backgrounds — see its comment.
+#   - Heading sizes and weights set in `[theme]` are **not** inherited by the
+#     sidebar (Streamlit's own option description says so). `[theme.sidebar]`
+#     below therefore restates them rather than relying on the top block.
+#   - `headingFont` is deliberately absent: unset, Streamlit uses `theme.font`
+#     for headings, so naming Inter twice only bought a second blocking request
+#     to fonts.googleapis.com for a subset of the weights already being fetched.
+#
 # Everything here is native config — no CSS. See `CLAUDE.md` for why the app
 # avoids Altair, which is the other half of "style it without fighting ty".
 
 [theme]
 font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
 codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
 baseFontSize = 14
 baseFontWeight = 400
@@ -31,6 +45,39 @@ showWidgetBorder = true
 showSidebarBorder = true
 linkUnderline = false
 
+# One palette for both modes, because Streamlit registers this key at [theme]
+# only. Two constraints, both measured rather than eyeballed:
+#
+#   - Every entry clears 3:1 (WCAG non-text minimum) against *both* #FFFFFF and
+#     the dark mode's #0F172A. That is a luminance band of [0.126, 0.300], which
+#     rules out the bright 500-weights of the warm and green hues — hence
+#     orange-600, amber-700, teal-600 rather than their lighter siblings.
+#   - The first three decide the market page's scatter, which colours by
+#     property_type and today has exactly three. Ordered blue / orange / teal
+#     because that triad survives colour-vision deficiency: simulating Machado
+#     et al. (2009) at severity 1.0, its worst pairwise CIELAB distance is 63
+#     under deuteranopia and 56 under protanopia. For comparison, a
+#     blue/green/violet ordering measures **1.7** under deuteranopia — visually
+#     one colour — which is what this file used to specify before the placement
+#     bug above was found. Re-measure before reordering these.
+chartCategoricalColors = [
+    "#3B82F6",
+    "#EA580C",
+    "#0D9488",
+    "#DB2777",
+    "#8B5CF6",
+    "#B45309",
+    "#64748B",
+    "#059669",
+]
+
+# Restated because the top block does not reach the sidebar. Deliberately a
+# smaller scale than the main column: the only heading the sidebar draws is
+# `st.subheader`, and it labels a control group rather than a section of content.
+[theme.sidebar]
+headingFontSizes = ["20px", "17px", "15px", "14px", "13px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+
 # --- light --------------------------------------------------------------------
 
 [theme.light]
@@ -45,7 +92,8 @@ borderColor = "#CBD5E1"              # Slate 300
 
 # Semantic colours. `st.metric` draws its delta arrow in green/red, and the
 # market page reads asking-vs-achieved as exactly that signal — these need to
-# carry meaning at a glance, not merely pass contrast.
+# carry meaning at a glance, not merely pass contrast. Unlike the chart palette
+# these *are* per-mode, so each side is tuned to its own background.
 greenColor = "#059669"
 redColor = "#DC2626"
 yellowColor = "#CA8A04"
@@ -53,33 +101,6 @@ orangeColor = "#EA580C"
 blueColor = "#2563EB"
 violetColor = "#7C3AED"
 grayColor = "#475569"
-
-# Ordered so the scatter's `color="property_type"` series stay distinguishable
-# for a viewer who cannot separate red from green.
-chartCategoricalColors = [
-    "#2563EB",
-    "#059669",
-    "#7C3AED",
-    "#DC2626",
-    "#CA8A04",
-    "#0891B2",
-    "#475569",
-    "#EA580C",
-]
-
-# Low to high. Light mode runs pale to saturated — the inverse of the dark half.
-chartSequentialColors = [
-    "#F0F9FF",
-    "#E0F2FE",
-    "#BAE6FD",
-    "#7DD3FC",
-    "#38BDF8",
-    "#0EA5E9",
-    "#0284C7",
-    "#0369A1",
-    "#075985",
-    "#0C4A6E",
-]
 
 dataframeBorderColor = "#CBD5E1"
 dataframeHeaderBackgroundColor = "#F1F5F9"
@@ -113,30 +134,6 @@ orangeColor = "#FB923C"
 blueColor = "#60A5FA"
 violetColor = "#A78BFA"
 grayColor = "#94A3B8"
-
-chartCategoricalColors = [
-    "#60A5FA",
-    "#34D399",
-    "#A78BFA",
-    "#F87171",
-    "#FBBF24",
-    "#38BDF8",
-    "#94A3B8",
-    "#FB923C",
-]
-
-chartSequentialColors = [
-    "#0C4A6E",
-    "#075985",
-    "#0369A1",
-    "#0284C7",
-    "#0EA5E9",
-    "#38BDF8",
-    "#7DD3FC",
-    "#BAE6FD",
-    "#E0F2FE",
-    "#F0F9FF",
-]
 
 dataframeBorderColor = "#334155"
 dataframeHeaderBackgroundColor = "#1E293B"

@@ -43,6 +43,7 @@ SUGGESTIONS = {
     ),
 }
 
+
 @st.fragment
 def _workspace_browser() -> None:
     """The sidebar's artifact list, isolated from the rest of the page.
@@ -55,11 +56,9 @@ def _workspace_browser() -> None:
     long conversation that is the dominant cost of the page, paid to answer a
     question about a file.
 
-    A turn still refreshes this. The rerun at the foot of the page is
+    A turn still refreshes this. The `st.rerun()` at the foot of the page is
     app-scoped, and a full app run reruns fragments too — so the invariant that
-    the sidebar never lags a turn behind is unaffected. (Written as prose rather
-    than as the call itself on purpose: the toggle-ordering test compares source
-    positions, and a literal here would read as a rerun above the toggle.)
+    the sidebar never lags a turn behind is unaffected.
     """
     artifacts = workspace_artifacts()
     if not artifacts:

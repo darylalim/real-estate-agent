@@ -860,18 +860,42 @@ def test_the_approval_toggle_renders_before_anything_that_can_rerun() -> None:
     which would have let the next `save_draft` through unattended.
 
     Order is the fix; `persist_state="session"` is the second line of defence.
+
+    On the tree because the text version could not see the difference between a
+    rerun and a *mention* of one. It stripped whole-line comments and nothing
+    else, so a docstring or trailing comment naming `st.rerun()` above the
+    toggle turned it red with no behavioural change — which is exactly what the
+    fragment's docstring did when it was added, and the workaround was a rule
+    written in CLAUDE.md for humans to remember. `ast` does not see prose.
     """
-    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
-    # Comments name `st.rerun()` when explaining the rule, and a bare `.index`
-    # matches the prose ahead of the statement it is describing. Compare code.
-    code = "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith("#")
-    )
-    assert code.index('key="require_approval"') < code.index("st.rerun()"), (
-        "the approval toggle must render before any st.rerun(), or its value is dropped"
-    )
-    assert 'persist_state="session"' in source, (
+    tree = ast.parse((PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8"))
+
+    def _keyword(call: ast.Call, name: str) -> Any:
+        for keyword in call.keywords:
+            if keyword.arg == name and isinstance(keyword.value, ast.Constant):
+                return keyword.value.value
+        return None
+
+    toggles = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and ast.unparse(node.func) == "st.toggle"
+        and _keyword(node, "key") == "require_approval"
+    ]
+    assert len(toggles) == 1, f"expected one approval toggle, found {len(toggles)}"
+    assert _keyword(toggles[0], "persist_state") == "session", (
         "keep the toggle's value across runs where it does not render"
+    )
+
+    reruns = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "st.rerun"
+    ]
+    assert reruns, "the page no longer reruns; this test is checking nothing"
+    assert toggles[0].lineno < min(node.lineno for node in reruns), (
+        "the approval toggle must render before any st.rerun(), or its value is dropped"
     )
 
 
@@ -931,19 +955,47 @@ def test_the_workspace_browser_is_a_fragment() -> None:
     this file" gets worse with every turn, which is exactly the shape of cost
     that never looks broken.
 
-    Asserted on source because the alternative is a live Streamlit runtime. The
-    ordering half matters too: the fragment writes into `st.sidebar`, and
-    Streamlit only lets it redraw there if that container was already written to
-    during the full run.
+    Asserted on the page rather than by running it, because the alternative is a
+    live Streamlit runtime. The placement half matters too: the fragment writes
+    into `st.sidebar`, and Streamlit only lets it redraw there if that container
+    was already written to during the full run.
+
+    On the tree, because `"@st.fragment" in source` would have passed with the
+    decorator on any function in the file, or in a comment.
     """
-    source = (PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8")
-    assert "@st.fragment" in source, (
-        "the workspace browser must be a fragment, or every file click re-reads "
+    tree = ast.parse((PROJECT_ROOT / "app_pages" / "chat.py").read_text(encoding="utf-8"))
+
+    browser = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_workspace_browser"
+        ),
+        None,
+    )
+    assert browser is not None, "chat.py has no top-level `def _workspace_browser`"
+    assert any(ast.unparse(node) == "st.fragment" for node in browser.decorator_list), (
+        "_workspace_browser must carry @st.fragment, or every file click re-reads "
         "the whole checkpoint"
     )
-    # The indent distinguishes the call from `def _workspace_browser()`, which
-    # necessarily comes first and would otherwise satisfy this on its own.
-    assert source.index("with st.sidebar:") < source.index("\n    _workspace_browser()"), (
+
+    sidebars = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.With)
+        and any(ast.unparse(item.context_expr) == "st.sidebar" for item in node.items)
+    ]
+    assert len(sidebars) == 1, f"expected one `with st.sidebar:` block, found {len(sidebars)}"
+
+    calls = [
+        node
+        for node in ast.walk(sidebars[0])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_workspace_browser"
+    ]
+    assert calls, "the fragment must be called inside the `with st.sidebar:` block"
+    assert calls[0].lineno > sidebars[0].body[0].lineno, (
         "the sidebar must receive a write before the fragment renders into it"
     )
 
@@ -990,6 +1042,50 @@ def test_the_listings_table_drops_columns_rather_than_masking_them() -> None:
     assert not missing, f"_NOT_IN_THE_TABLE names columns that do not exist: {missing}"
 
 
+def _theme_config() -> dict[str, Any]:
+    return tomllib.loads((PROJECT_ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
+
+
+def _dotted_keys(section: dict[str, Any], prefix: str) -> list[str]:
+    """Every leaf setting in a config section, as the dotted key Streamlit uses."""
+    keys: list[str] = []
+    for name, value in section.items():
+        if isinstance(value, dict):
+            keys.extend(_dotted_keys(value, f"{prefix}.{name}"))
+        else:
+            keys.append(f"{prefix}.{name}")
+    return keys
+
+
+def test_every_theme_setting_is_a_real_config_option() -> None:
+    """Streamlit *discards* a misplaced theme key; it does not reject the file.
+
+    An option registered at `[theme]` only — `chartCategoricalColors` is one —
+    logs "not a valid config option" to stderr when it appears under
+    `[theme.light]`, and is then simply absent. The app starts, looks styled,
+    and silently uses the built-in palette. That shipped here: both modes
+    carried a hand-tuned categorical palette that Streamlit never read, and the
+    test guarding this file checked two keys out of sixty, so the suite was
+    green over a theme discarding a third of its content.
+
+    `st.get_option` is the registry, so ask it about every leaf rather than
+    maintaining a second list of what is valid.
+    """
+    import streamlit as st
+
+    unknown = []
+    for key in _dotted_keys(_theme_config()["theme"], "theme"):
+        try:
+            st.get_option(key)
+        except RuntimeError:
+            unknown.append(key)
+
+    assert not unknown, (
+        "these theme settings are not config options and are silently discarded — "
+        f"check whether they are registered at [theme] only: {unknown}"
+    )
+
+
 def test_the_theme_leaves_the_light_dark_switch_working() -> None:
     """A custom theme with only `[theme]` locks the app to a single mode.
 
@@ -1000,10 +1096,7 @@ def test_the_theme_leaves_the_light_dark_switch_working() -> None:
     halves are authored. Nothing raises if one is deleted; the toggle just
     disappears.
     """
-    config = tomllib.loads(
-        (PROJECT_ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
-    )
-    theme = config["theme"]
+    theme = _theme_config()["theme"]
     for mode in ("light", "dark"):
         assert mode in theme, f"[theme.{mode}] is missing — the mode switch will not render"
         assert theme[mode].get("primaryColor"), f"[theme.{mode}] defines no primaryColor"
