@@ -53,7 +53,9 @@ Both pages are themed from `.streamlit/config.toml` — native config, no CSS �
 and the theme defines light *and* dark, so the mode switch in the settings menu
 keeps working. Browsing a workspace artifact in the chat sidebar is an
 `st.fragment`, so picking a file does not re-read the checkpoint or re-render
-the conversation.
+the conversation. Tool-result panels and the file preview render their contents
+only when opened — a collapsed `st.expander` still ships its body otherwise, so
+a long thread was re-sending every tool call's JSON on every turn.
 
 Checks — all three must pass. No API calls, no key required:
 
@@ -64,7 +66,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 67 tests, ~0.9s
+uv run pytest tests/ -q       # 70 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```

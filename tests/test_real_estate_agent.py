@@ -629,6 +629,31 @@ def _function_named(path: Path, name: str) -> ast.FunctionDef:
     raise AssertionError(f"{path.name} has no top-level `def {name}`")
 
 
+def _sole_call(scope: ast.AST, dotted: str) -> ast.Call:
+    """The one call to `dotted` under `scope`, as a node.
+
+    Returning the node rather than a bool is what lets a caller ask where it
+    *sits* -- `any(node is found for ...)` over a guard's body is an identity
+    check, so it cannot be satisfied by a second, similar-looking call
+    elsewhere in the function.
+    """
+    found = [
+        node
+        for node in ast.walk(scope)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == dotted
+    ]
+    assert len(found) == 1, f"expected exactly one `{dotted}` call, found {len(found)}"
+    return found[0]
+
+
+def _keyword_constant(call: ast.Call, name: str) -> Any:
+    """One keyword argument's literal value, or None when it is not passed."""
+    for keyword in call.keywords:
+        if keyword.arg == name and isinstance(keyword.value, ast.Constant):
+            return keyword.value.value
+    return None
+
+
 def test_resuming_a_pending_approval_without_the_flag_refuses() -> None:
     """The gate must not fail open across processes.
 
@@ -997,6 +1022,114 @@ def test_the_workspace_browser_is_a_fragment() -> None:
     assert calls, "the fragment must be called inside the `with st.sidebar:` block"
     assert calls[0].lineno > sidebars[0].body[0].lineno, (
         "the sidebar must receive a write before the fragment renders into it"
+    )
+
+
+# Both of the next two pin the same Streamlit rule, one layer down from the
+# widget-state family already documented above: **a collapsed expander still
+# renders its body.** Nothing about the page looks wrong when they regress --
+# the panels are shut either way -- the payload just quietly returns.
+
+
+def test_tool_result_panels_render_only_when_open() -> None:
+    """Every tool result must stay off the wire until someone opens it.
+
+    A `ToolMessage` panel holds up to `_TOOL_RESULT_PREVIEW` characters of JSON,
+    and `st.expander` renders its body whether or not it is expanded — so the
+    page re-shipped every panel of every prior tool call on every full rerun,
+    growing with the thread and looking identical at every size.
+
+    Two halves, and dropping either is silent in a different direction. Without
+    `on_change="rerun"` the `.open` property is `None` for every expander, so
+    the guard goes permanently *false* and results stop rendering at all — loud,
+    but only if someone opens one. Without the guard the body renders
+    unconditionally again, which is the original defect and shows nothing.
+    """
+    render = _function_named(PROJECT_ROOT / "ui" / "agent_session.py", "render_message")
+
+    panel = _sole_call(render, "st.expander")
+    assert _keyword_constant(panel, "on_change") == "rerun", (
+        'the panel needs on_change="rerun" for `.open` to be a boolean; under the '
+        'default "ignore" it is None and the guard below can never be true'
+    )
+    assert any(keyword.arg == "key" for keyword in panel.keywords), (
+        "the panels are built in a loop, so without a key Streamlit identifies them "
+        "by position — which differs between the streaming and history renders of "
+        "the same message, losing whatever the reader had opened"
+    )
+
+    guard = _sole_guard(render, "panel", "open")
+    body = _sole_call(render, "st.code")
+    assert any(body is node for statement in guard.body for node in ast.walk(statement)), (
+        "the result body must render inside the open guard, or it ships on every "
+        "rerun exactly as it did before"
+    )
+
+
+def test_the_workspace_preview_renders_only_when_open() -> None:
+    """Same rule, and here the fragment makes it nearly free.
+
+    `read_workspace_file` still runs — `st.download_button` needs the bytes in
+    hand — so what the guard saves is the decode and the payload, capped at
+    `_PREVIEW_MAX_BYTES` rather than at whatever a specialist chose to write.
+    Because this expander lives inside `_workspace_browser`, `on_change="rerun"`
+    reruns the fragment and not the page, so unlike the transcript panels above
+    there is no full-rerun cost to weigh against it.
+    """
+    browser = _function_named(PROJECT_ROOT / "app_pages" / "chat.py", "_workspace_browser")
+
+    preview = _sole_call(browser, "st.expander")
+    assert _keyword_constant(preview, "on_change") == "rerun", (
+        'without on_change="rerun" the preview `.open` is None and the body below '
+        "never renders — the file picker would look broken"
+    )
+
+    guard = _sole_guard(browser, "preview", "open")
+    body = _sole_call(browser, "st.code")
+    assert any(body is node for statement in guard.body for node in ast.walk(statement)), (
+        "the preview body must render inside the open guard, or every file click "
+        "ships the whole file again"
+    )
+
+
+def test_every_market_data_reader_is_cached() -> None:
+    """The dashboard's readers are the app's only per-rerun provider traffic.
+
+    On the mock every one of these is a free in-memory scan, which is exactly
+    why an uncached one survives review: nothing is slow and nothing is wrong.
+    But `get_provider` is the seam the README promises you can point at a real
+    feed in one edit, and on that day an uncached reader is a network
+    round-trip on every slider drag. Asserted structurally rather than by
+    timing, because the mock will never be slow enough to fail a timing test.
+    """
+    tree = ast.parse((PROJECT_ROOT / "ui" / "market_data.py").read_text(encoding="utf-8"))
+
+    readers = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call, ast.Call)
+            and ast.unparse(call.func) in {"get_provider", "_market_tools"}
+            for call in ast.walk(node)
+        )
+    ]
+    assert len(readers) >= 4, (
+        f"only {len(readers)} functions in market_data.py reach the provider; "
+        "this test is checking almost nothing"
+    )
+
+    uncached = [
+        node.name
+        for node in readers
+        if not any(
+            ast.unparse(decorator).startswith(("st.cache_data", "st.cache_resource"))
+            for decorator in node.decorator_list
+        )
+    ]
+    assert not uncached, (
+        f"these read the provider on every rerun with no cache: {uncached}. "
+        "Add st.cache_data (with a ttl or max_entries) or st.cache_resource."
     )
 
 

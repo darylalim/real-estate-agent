@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 67 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 70 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -263,6 +263,28 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   `{name: None}` hides a column in the browser and still serialises every value into the payload. Note the
   trade: `frame.drop(columns=...)` raises `KeyError` on a name that is not there, so `_NOT_IN_THE_TABLE` is
   checked against a real frame by `test_the_listings_table_drops_columns_rather_than_masking_them`.
+  A stable `key=` on that table was tried and **dropped**: the general advice is that an unkeyed
+  dataframe's identity includes its data, so a filter change remounts it and loses the reader's sort —
+  but measured on 1.60, sorting by price and then switching property type kept the sort *with and
+  without* the key, on a clean server restart each way. Don't re-add it on the strength of the advice
+  alone; this table takes the default `on_select="ignore"`, and whatever the rule applies to, it is not
+  this. Re-measure if that argument ever changes.
+- **A collapsed `st.expander` still renders its body.** Two sites pay for this and both were paying it:
+  the transcript's tool-result panels (up to `_TOOL_RESULT_PREVIEW` chars of JSON *per tool call*, re-sent
+  on every full rerun and growing with the thread) and the sidebar's file preview. The fix is
+  `on_change="rerun"` plus an `if panel.open:` guard — `.open` is `None` under the default `"ignore"`, so
+  the flag is what makes the guard meaningful, and dropping it stops results rendering *at all*. Note the
+  asymmetry: in the fragment the resulting rerun is fragment-scoped and therefore nearly free, while in the
+  transcript opening a panel costs a full rerun (`thread_snapshot` plus a re-render). That trade is won by
+  transcripts being appended to more often than read back — revisit the guard, not the size cap, if that
+  changes. The panels also need a `key`, because they are built in a loop and position differs between the
+  streaming and history renders of the same message; `_panel_key` hashes `message_key` rather than reusing
+  it raw, whose fallback branch is an unbounded `repr()`.
+- **Every reader in `ui/market_data.py` is cached.** On the mock they are free in-memory scans, which is
+  exactly why an uncached one survives review — but `get_provider` is the seam the README promises you can
+  point at a real feed in one edit, and on that day an uncached reader is a network round-trip per slider
+  drag. `test_every_market_data_reader_is_cached` finds the functions that reach the provider and checks
+  the decorators, rather than timing anything the mock will never be slow enough to fail.
 
 ## Invariants that fail silently
 

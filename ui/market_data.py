@@ -105,8 +105,16 @@ def dataset_choices() -> tuple[list[str], list[str]]:
     return cities, property_types
 
 
+@st.cache_data(ttl="15m", max_entries=64, show_spinner=False)
 def state_for_city(city: str) -> str | None:
-    """The state code for a city, so the filters need only ask for one."""
+    """The state code for a city, so the filters need only ask for one.
+
+    Cached like every other reader in this module, and for the reason the mock
+    hides: on the in-memory dataset this is a free scan, but the page calls it
+    on *every* rerun -- each filter change, each slider drag -- and the whole
+    point of ``ListingsProvider`` is that ``get_provider`` may one day return
+    something that answers over the network.
+    """
     for listing in get_provider().search(city=city, status=None, limit=1):
         return listing.state
     return None

@@ -88,8 +88,18 @@ def _workspace_browser() -> None:
             icon=":material/download:",
             width="stretch",
         )
-    with st.expander("Preview", icon=":material/description:"):
-        st.code(payload.decode("utf-8", errors="replace"), language="markdown")
+    # Gated on `.open` for the same reason the tool-result panels are: a
+    # collapsed expander still renders its body, so picking a file shipped the
+    # whole preview to the browser whether or not anyone wanted to read it. The
+    # `read_workspace_file` above still runs -- `st.download_button` needs the
+    # bytes in hand -- so what this saves is the decode and the payload, which
+    # is the part bounded by `_PREVIEW_MAX_BYTES` rather than by a draft's size.
+    # Cheap to open, too: this is inside the fragment, so `on_change="rerun"`
+    # reruns the browser and not the page.
+    preview = st.expander("Preview", icon=":material/description:", on_change="rerun")
+    if preview.open:
+        with preview:
+            st.code(payload.decode("utf-8", errors="replace"), language="markdown")
 
 
 st.title("Chat")

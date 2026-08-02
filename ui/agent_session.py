@@ -16,6 +16,7 @@ uses, so a thread started in the CLI renders correctly here and vice versa.
 from __future__ import annotations
 
 import sqlite3
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,19 @@ def message_key(message: BaseMessage) -> str:
     return message.id or repr(message)
 
 
+def _panel_key(message: BaseMessage) -> str:
+    """A stable, CSS-safe widget key for one tool result's panel.
+
+    Derived from ``message_key`` so a panel's identity is its message's
+    identity -- the panels are created in a loop, and without a key Streamlit
+    identifies them by position, which differs between the streaming render and
+    the history render of the very same message. Hashed rather than used raw
+    because ``message_key``'s fallback branch is ``repr(message)``: unbounded,
+    and full of characters that would go straight into an ``st-key-`` CSS class.
+    """
+    return "tool_" + sha256(message_key(message).encode("utf-8")).hexdigest()[:16]
+
+
 def _text_of(message: BaseMessage) -> str:
     """The message's text.
 
@@ -124,11 +138,31 @@ def render_message(message: BaseMessage) -> None:
 
     if isinstance(message, ToolMessage):
         body = str(message.content)
-        clipped = body[:_TOOL_RESULT_PREVIEW]
-        if len(body) > _TOOL_RESULT_PREVIEW:
-            clipped += f"\n… (+{len(body) - _TOOL_RESULT_PREVIEW} chars)"
-        with st.expander(f"{message.name} · {len(body):,} chars", icon=":material/database:"):
-            st.code(clipped, language="json")
+        # `on_change="rerun"` is the whole reason `.open` is a boolean here --
+        # under the default "ignore" it is None, and an expander renders its
+        # body whether or not anyone opened it. That body is up to
+        # `_TOOL_RESULT_PREVIEW` characters of JSON *per tool call*, re-sent on
+        # every full rerun of the page, so a long thread pays to ship every
+        # panel nobody is looking at, on every turn, forever.
+        #
+        # The trade is real and worth stating: opening one now costs a full
+        # rerun, which on this page means `thread_snapshot` and a re-render of
+        # the transcript. A transcript is appended to far more often than it is
+        # read back, so the payload saved per turn beats the rerun paid per
+        # click -- but if that ever stops being true, this is the line to
+        # revisit, not the cap above it.
+        panel = st.expander(
+            f"{message.name} · {len(body):,} chars",
+            icon=":material/database:",
+            on_change="rerun",
+            key=_panel_key(message),
+        )
+        if panel.open:
+            clipped = body[:_TOOL_RESULT_PREVIEW]
+            if len(body) > _TOOL_RESULT_PREVIEW:
+                clipped += f"\n… (+{len(body) - _TOOL_RESULT_PREVIEW} chars)"
+            with panel:
+                st.code(clipped, language="json")
 
 
 def thread_snapshot(
