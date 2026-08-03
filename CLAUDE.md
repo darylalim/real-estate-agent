@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 70 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 71 tests, ~0.9s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -269,22 +269,39 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   without* the key, on a clean server restart each way. Don't re-add it on the strength of the advice
   alone; this table takes the default `on_select="ignore"`, and whatever the rule applies to, it is not
   this. Re-measure if that argument ever changes.
-- **A collapsed `st.expander` still renders its body.** Two sites pay for this and both were paying it:
-  the transcript's tool-result panels (up to `_TOOL_RESULT_PREVIEW` chars of JSON *per tool call*, re-sent
-  on every full rerun and growing with the thread) and the sidebar's file preview. The fix is
-  `on_change="rerun"` plus an `if panel.open:` guard — `.open` is `None` under the default `"ignore"`, so
-  the flag is what makes the guard meaningful, and dropping it stops results rendering *at all*. Note the
-  asymmetry: in the fragment the resulting rerun is fragment-scoped and therefore nearly free, while in the
-  transcript opening a panel costs a full rerun (`thread_snapshot` plus a re-render). That trade is won by
-  transcripts being appended to more often than read back — revisit the guard, not the size cap, if that
-  changes. The panels also need a `key`, because they are built in a loop and position differs between the
-  streaming and history renders of the same message; `_panel_key` hashes `message_key` rather than reusing
-  it raw, whose fallback branch is an unbounded `repr()`.
-- **Every reader in `ui/market_data.py` is cached.** On the mock they are free in-memory scans, which is
-  exactly why an uncached one survives review — but `get_provider` is the seam the README promises you can
-  point at a real feed in one edit, and on that day an uncached reader is a network round-trip per slider
-  drag. `test_every_market_data_reader_is_cached` finds the functions that reach the provider and checks
-  the decorators, rather than timing anything the mock will never be slow enough to fail.
+- **A collapsed `st.expander` still renders its body, and making one lazy makes it a widget.** Both halves
+  live in `ui/elements.py` (`lazy_expander`, `stable_key`) rather than beside each call site, because the
+  second half is easy to get exactly backwards. Two of the app's three expanders are lazy: the transcript's
+  tool-result panels (up to `_TOOL_RESULT_PREVIEW` chars of JSON *per tool call*, re-sent on every full
+  rerun and growing with the thread) and the sidebar's file preview. The third, `Resume a thread`, is
+  **deliberately not** — it wraps a form, and a lazily rendered form widget loses its state, which is the
+  dead-Load-button defect the README already lists.
+  - `on_change="rerun"` is what makes `.open` a boolean; under the default `"ignore"` it is `None`, so
+    dropping the flag makes every guard false and results stop rendering *at all*.
+  - **A lazy expander needs a key that varies, and a constant key is worse than none.** Measured on 1.60:
+    two same-label stateful expanders raise `StreamlitDuplicateElementId` and the page renders nothing; a
+    shared constant key raises `StreamlitDuplicateElementKey` instead. Identity is the **parameter tuple,
+    never the position** — an earlier version of this file said the opposite. The panel label is
+    `name · N chars`, so two `search_listings` results of equal length collide; the preview's label is the
+    constant `"Preview"`, so without a per-file key one file's open state applies to the next one picked.
+    Hence `stable_key("tool", message_key(...))` and `stable_key("preview", chosen)`.
+  - The costs differ by site. In the fragment the rerun is fragment-scoped — but not free: it re-globs the
+    workspace and re-reads the file, where before the toggle reached the server at all. In the transcript
+    it is a full rerun (`thread_snapshot` plus a re-render), won by transcripts being appended to far more
+    often than read back. Revisit the guard, not the size cap, if that changes.
+  - One consequence not covered by a test: the transcript sits above the approval form, so expanding a
+    panel mid-review now reruns the page under an unsubmitted form. The decision and reason widgets keep
+    their keys across that rerun, so their instances should persist — but this is reasoning, not a
+    measurement, and `AppTest` commits form widgets directly and cannot model the client-side buffer.
+- **Every module-level function in `ui/market_data.py` is cached.** On the mock they are free in-memory
+  scans, which is exactly why an uncached one survives review — but `get_provider` is the seam the README
+  promises you can point at a real feed in one edit, and on that day an uncached reader is a network
+  round-trip per slider drag. `test_every_market_data_function_is_cached` asserts over *every* function
+  rather than the ones calling `get_provider` by name: the name-matching version could not see a reader
+  that reached the provider through a new helper, and passed by not looking. It checks the `ttl`/
+  `max_entries` bound too, which the previous version only promised in its failure message.
+  `state_for_city` is gone — `dataset_choices` returns the city→state map off the scan it was already
+  doing, rather than a second lookup with a second cache to keep warm.
 
 ## Invariants that fail silently
 

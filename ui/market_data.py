@@ -93,28 +93,20 @@ def listings_frame(
 
 
 @st.cache_data(ttl="15m", show_spinner=False)
-def dataset_choices() -> tuple[list[str], list[str]]:
-    """Cities and property types actually present, for the filter widgets.
+def dataset_choices() -> tuple[list[str], list[str], dict[str, str]]:
+    """Cities, property types, and each city's state, for the filter widgets.
 
     Read off the data rather than hardcoded, so pointing ``get_provider`` at a
     real feed repopulates the filters with no further change.
+
+    The state map rides along on this scan rather than being a second lookup.
+    It used to be a `state_for_city` that searched the provider again for a
+    value this scan had already seen -- free against the in-memory mock, which
+    is exactly why it survived, but two round-trips per city against a real
+    feed and a second cache family to keep warm and invalidate.
     """
     listings = get_provider().search(status=None, limit=_SEARCH_LIMIT)
     cities = sorted({listing.city for listing in listings})
     property_types = sorted({listing.property_type for listing in listings})
-    return cities, property_types
-
-
-@st.cache_data(ttl="15m", max_entries=64, show_spinner=False)
-def state_for_city(city: str) -> str | None:
-    """The state code for a city, so the filters need only ask for one.
-
-    Cached like every other reader in this module, and for the reason the mock
-    hides: on the in-memory dataset this is a free scan, but the page calls it
-    on *every* rerun -- each filter change, each slider drag -- and the whole
-    point of ``ListingsProvider`` is that ``get_provider`` may one day return
-    something that answers over the network.
-    """
-    for listing in get_provider().search(city=city, status=None, limit=1):
-        return listing.state
-    return None
+    states = {listing.city: listing.state for listing in listings}
+    return cities, property_types, states

@@ -16,7 +16,6 @@ from ui.market_data import (
     dataset_choices,
     listings_frame,
     market_snapshot,
-    state_for_city,
 )
 
 _STATUS_CHOICES = {"Active": "active", "Sold": "sold", "Pending": "pending", "All": None}
@@ -58,7 +57,7 @@ def _plain(value: float | None) -> str:
     return "—" if value is None else f"{value:,.0f}"
 
 
-cities, property_types = dataset_choices()
+cities, property_types, states = dataset_choices()
 
 with st.sidebar:
     st.subheader("Filters")
@@ -81,7 +80,7 @@ with st.sidebar:
 
 property_type = None if property_type_label == "All" else property_type_label
 status = _STATUS_CHOICES.get(status_label or "Active")
-state = state_for_city(city)
+state = states.get(city)
 
 snapshot = market_snapshot(city, state, property_type, months_back)
 active = snapshot["active_inventory"]

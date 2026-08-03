@@ -16,7 +16,6 @@ uses, so a thread started in the CLI renders correctly here and vice versa.
 from __future__ import annotations
 
 import sqlite3
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +25,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from real_estate_agent import build_agent
 from real_estate_agent.config import CHECKPOINT_DB, WORKSPACE_DIR, ensure_workspace
+from ui.elements import lazy_expander, stable_key
 from ui.provider import get_provider
 
 # Tool payloads are JSON aimed at a model, not a reader. Show enough to tell
@@ -83,19 +83,6 @@ def message_key(message: BaseMessage) -> str:
     return message.id or repr(message)
 
 
-def _panel_key(message: BaseMessage) -> str:
-    """A stable, CSS-safe widget key for one tool result's panel.
-
-    Derived from ``message_key`` so a panel's identity is its message's
-    identity -- the panels are created in a loop, and without a key Streamlit
-    identifies them by position, which differs between the streaming render and
-    the history render of the very same message. Hashed rather than used raw
-    because ``message_key``'s fallback branch is ``repr(message)``: unbounded,
-    and full of characters that would go straight into an ``st-key-`` CSS class.
-    """
-    return "tool_" + sha256(message_key(message).encode("utf-8")).hexdigest()[:16]
-
-
 def _text_of(message: BaseMessage) -> str:
     """The message's text.
 
@@ -138,24 +125,29 @@ def render_message(message: BaseMessage) -> None:
 
     if isinstance(message, ToolMessage):
         body = str(message.content)
-        # `on_change="rerun"` is the whole reason `.open` is a boolean here --
-        # under the default "ignore" it is None, and an expander renders its
-        # body whether or not anyone opened it. That body is up to
-        # `_TOOL_RESULT_PREVIEW` characters of JSON *per tool call*, re-sent on
-        # every full rerun of the page, so a long thread pays to ship every
-        # panel nobody is looking at, on every turn, forever.
+        # Lazy because the body is up to `_TOOL_RESULT_PREVIEW` characters of
+        # JSON *per tool call*, re-sent on every full rerun, so a long thread
+        # would ship every panel nobody is looking at on every turn. See
+        # `ui/elements` for why the flag and the guard are two halves of one
+        # thing.
         #
-        # The trade is real and worth stating: opening one now costs a full
-        # rerun, which on this page means `thread_snapshot` and a re-render of
-        # the transcript. A transcript is appended to far more often than it is
+        # Keyed on the message, and that is load-bearing rather than tidy: the
+        # label is `name · N chars`, so two `search_listings` results of equal
+        # length in one thread collide, and a stateful expander whose id
+        # collides raises `StreamlitDuplicateElementId` and renders the page
+        # blank. A *constant* key is worse, not safer -- it raises
+        # `StreamlitDuplicateElementKey` on the second panel every time.
+        #
+        # The trade is real and worth stating: opening one costs a full rerun,
+        # which on this page means `thread_snapshot` and a re-render of the
+        # transcript. A transcript is appended to far more often than it is
         # read back, so the payload saved per turn beats the rerun paid per
         # click -- but if that ever stops being true, this is the line to
         # revisit, not the cap above it.
-        panel = st.expander(
+        panel = lazy_expander(
             f"{message.name} · {len(body):,} chars",
             icon=":material/database:",
-            on_change="rerun",
-            key=_panel_key(message),
+            key=stable_key("tool", message_key(message)),
         )
         if panel.open:
             clipped = body[:_TOOL_RESULT_PREVIEW]

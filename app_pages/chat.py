@@ -32,6 +32,7 @@ from ui.agent_session import (
     workspace_artifacts,
     workspace_path,
 )
+from ui.elements import lazy_expander, stable_key
 
 SUGGESTIONS = {
     "Find homes": "Find 3-bed homes in Round Rock under $600k and build me a shortlist.",
@@ -88,18 +89,34 @@ def _workspace_browser() -> None:
             icon=":material/download:",
             width="stretch",
         )
-    # Gated on `.open` for the same reason the tool-result panels are: a
-    # collapsed expander still renders its body, so picking a file shipped the
-    # whole preview to the browser whether or not anyone wanted to read it. The
-    # `read_workspace_file` above still runs -- `st.download_button` needs the
-    # bytes in hand -- so what this saves is the decode and the payload, which
-    # is the part bounded by `_PREVIEW_MAX_BYTES` rather than by a draft's size.
-    # Cheap to open, too: this is inside the fragment, so `on_change="rerun"`
-    # reruns the browser and not the page.
-    preview = st.expander("Preview", icon=":material/description:", on_change="rerun")
+    # Lazy so that picking a file does not ship its contents to a reader who
+    # only wanted a different name in the list. `read_workspace_file` above
+    # still runs -- `st.download_button` needs the bytes in hand -- so what
+    # this saves is the decode and the payload.
+    #
+    # Keyed on the *file*, not just given some key. The label is the constant
+    # "Preview", and an expander's identity is its parameters, so a single key
+    # would leave one file's open state applying to the next one selected:
+    # open a 2KB draft, pick a 200KB export, and it ships unasked. That is the
+    # rule the widget-state family in CLAUDE.md is about -- a key has to change
+    # when the thing it is asking about changes.
+    #
+    # Unlike the transcript's panels this costs almost nothing to toggle, since
+    # the fragment scopes the rerun -- though "almost" rather than "nothing":
+    # a fragment rerun re-globs the workspace and re-reads the file.
+    preview = lazy_expander(
+        "Preview", icon=":material/description:", key=stable_key("preview", chosen)
+    )
     if preview.open:
+        body = payload.decode("utf-8", errors="replace")
+        if truncated:
+            # The caption above just said this file is too large to serve
+            # inline. Rendering the first _PREVIEW_MAX_BYTES with no marker
+            # would contradict it and hand the reader a document that simply
+            # stops mid-line. `render_message` marks its cut for this reason.
+            body += "\n\n… truncated — read the whole file from the path above."
         with preview:
-            st.code(payload.decode("utf-8", errors="replace"), language="markdown")
+            st.code(body, language="markdown")
 
 
 st.title("Chat")

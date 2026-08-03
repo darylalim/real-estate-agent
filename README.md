@@ -66,7 +66,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 70 tests, ~0.9s
+uv run pytest tests/ -q       # 71 tests, ~0.9s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```

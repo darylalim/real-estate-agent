@@ -1025,111 +1025,125 @@ def test_the_workspace_browser_is_a_fragment() -> None:
     )
 
 
-# Both of the next two pin the same Streamlit rule, one layer down from the
-# widget-state family already documented above: **a collapsed expander still
-# renders its body.** Nothing about the page looks wrong when they regress --
-# the panels are shut either way -- the payload just quietly returns.
+# The next three pin one Streamlit rule, a layer under the widget-state family
+# above: **a collapsed expander still renders its body**, and **a stateful
+# expander's identity is its parameters**. Both halves were measured on 1.60 --
+# two same-label stateful expanders in one run raise StreamlitDuplicateElementId
+# and the page renders nothing; a shared constant key raises
+# StreamlitDuplicateElementKey instead. So the danger runs both ways: too little
+# keying kills the page, and no guard silently restores the payload.
 
 
-def test_tool_result_panels_render_only_when_open() -> None:
-    """Every tool result must stay off the wire until someone opens it.
+def test_the_lazy_expander_helper_sets_the_flag_that_makes_open_meaningful() -> None:
+    """`.open` is only a boolean under `on_change="rerun"`.
 
-    A `ToolMessage` panel holds up to `_TOOL_RESULT_PREVIEW` characters of JSON,
-    and `st.expander` renders its body whether or not it is expanded — so the
-    page re-shipped every panel of every prior tool call on every full rerun,
-    growing with the thread and looking identical at every size.
-
-    Two halves, and dropping either is silent in a different direction. Without
-    `on_change="rerun"` the `.open` property is `None` for every expander, so
-    the guard goes permanently *false* and results stop rendering at all — loud,
-    but only if someone opens one. Without the guard the body renders
-    unconditionally again, which is the original defect and shows nothing.
+    The rule lives in one helper now, so this is the one place it can go
+    missing. Under the default `"ignore"` every `.open` is `None`, which makes
+    each caller's guard permanently false and stops tool results rendering
+    at all — the opposite failure from the one the guard exists to prevent, and
+    the reason both are pinned rather than just the guard.
     """
-    render = _function_named(PROJECT_ROOT / "ui" / "agent_session.py", "render_message")
+    helper = _function_named(PROJECT_ROOT / "ui" / "elements.py", "lazy_expander")
 
-    panel = _sole_call(render, "st.expander")
-    assert _keyword_constant(panel, "on_change") == "rerun", (
-        'the panel needs on_change="rerun" for `.open` to be a boolean; under the '
-        'default "ignore" it is None and the guard below can never be true'
+    call = _sole_call(helper, "st.expander")
+    assert _keyword_constant(call, "on_change") == "rerun", (
+        'lazy_expander must pass on_change="rerun"; without it `.open` is None at '
+        "every call site and every guarded body goes dark"
     )
-    assert any(keyword.arg == "key" for keyword in panel.keywords), (
-        "the panels are built in a loop, so without a key Streamlit identifies them "
-        "by position — which differs between the streaming and history renders of "
-        "the same message, losing whatever the reader had opened"
-    )
-
-    guard = _sole_guard(render, "panel", "open")
-    body = _sole_call(render, "st.code")
-    assert any(body is node for statement in guard.body for node in ast.walk(statement)), (
-        "the result body must render inside the open guard, or it ships on every "
-        "rerun exactly as it did before"
+    assert any(argument.arg == "key" for argument in helper.args.kwonlyargs), (
+        "`key` must stay keyword-only and required — an unkeyed stateful expander "
+        "raises StreamlitDuplicateElementId the moment two labels coincide"
     )
 
 
-def test_the_workspace_preview_renders_only_when_open() -> None:
-    """Same rule, and here the fragment makes it nearly free.
+@pytest.mark.parametrize(
+    ("module", "function", "variable", "identity"),
+    [
+        ("ui/agent_session.py", "render_message", "panel", "message"),
+        ("app_pages/chat.py", "_workspace_browser", "preview", "chosen"),
+    ],
+)
+def test_expander_bodies_render_only_when_open(
+    module: str, function: str, variable: str, identity: str
+) -> None:
+    """Each lazy site guards its body, and keys on what it is showing.
 
-    `read_workspace_file` still runs — `st.download_button` needs the bytes in
-    hand — so what the guard saves is the decode and the payload, capped at
-    `_PREVIEW_MAX_BYTES` rather than at whatever a specialist chose to write.
-    Because this expander lives inside `_workspace_browser`, `on_change="rerun"`
-    reruns the fragment and not the page, so unlike the transcript panels above
-    there is no full-rerun cost to weigh against it.
+    Three ways to regress, and the tree catches each. Rendering the body outside
+    the `if x.open:` guard puts the payload back on every rerun -- the original
+    defect, and invisible. Rendering it outside `with x:` leaves it on the page
+    as a loose block below its own expander. And a key that does not derive from
+    the thing on display is the widget-state defect this repo has shipped four
+    times: a *constant* key here is not a milder version of no key, it is fatal
+    on the second element.
     """
-    browser = _function_named(PROJECT_ROOT / "app_pages" / "chat.py", "_workspace_browser")
+    scope = _function_named(PROJECT_ROOT / module, function)
 
-    preview = _sole_call(browser, "st.expander")
-    assert _keyword_constant(preview, "on_change") == "rerun", (
-        'without on_change="rerun" the preview `.open` is None and the body below '
-        "never renders — the file picker would look broken"
+    call = _sole_call(scope, "lazy_expander")
+    key = next((keyword.value for keyword in call.keywords if keyword.arg == "key"), None)
+    assert key is not None, f"{function} must key its expander"
+    assert not isinstance(key, ast.Constant), (
+        "a constant key is worse than no key: the second element raises "
+        "StreamlitDuplicateElementKey and the page renders nothing"
+    )
+    assert identity in {
+        node.id for node in ast.walk(key) if isinstance(node, ast.Name)
+    }, (
+        f"the key must derive from `{identity}`, or one item's open state applies "
+        "to the next one shown"
     )
 
-    guard = _sole_guard(browser, "preview", "open")
-    body = _sole_call(browser, "st.code")
+    guard = _sole_guard(scope, variable, "open")
+    body = _sole_call(scope, "st.code")
     assert any(body is node for statement in guard.body for node in ast.walk(statement)), (
-        "the preview body must render inside the open guard, or every file click "
-        "ships the whole file again"
+        "the body must render inside the open guard, or it ships on every rerun "
+        "exactly as it did before"
+    )
+    withs = [
+        node
+        for node in ast.walk(guard)
+        if isinstance(node, ast.With)
+        and any(ast.unparse(item.context_expr) == variable for item in node.items)
+    ]
+    assert any(body is node for block in withs for node in ast.walk(block)), (
+        f"the body must render inside `with {variable}:`, or it lands on the page "
+        "as a loose block underneath its own expander rather than inside it"
     )
 
 
-def test_every_market_data_reader_is_cached() -> None:
-    """The dashboard's readers are the app's only per-rerun provider traffic.
+def test_every_market_data_function_is_cached() -> None:
+    """`ui/market_data.py` exists to be the dashboard's cached reads.
 
-    On the mock every one of these is a free in-memory scan, which is exactly
-    why an uncached one survives review: nothing is slow and nothing is wrong.
-    But `get_provider` is the seam the README promises you can point at a real
-    feed in one edit, and on that day an uncached reader is a network
-    round-trip on every slider drag. Asserted structurally rather than by
-    timing, because the mock will never be slow enough to fail a timing test.
+    On the mock each of these is a free in-memory scan, which is exactly why an
+    uncached one survives review: nothing is slow and nothing is wrong. But
+    `get_provider` is the seam the README promises you can point at a real feed
+    in one edit, and on that day an uncached reader is a network round-trip on
+    every slider drag.
+
+    The rule is every module-level function rather than "functions that call
+    `get_provider`", because that earlier shape keyed on two hardcoded callee
+    names: a reader reaching the provider through any new helper was simply not
+    collected, and passed by not being looked at. The `ttl`/`max_entries` half
+    is checked rather than only promised in the message.
     """
     tree = ast.parse((PROJECT_ROOT / "ui" / "market_data.py").read_text(encoding="utf-8"))
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    assert functions, "market_data.py has no module-level functions; this checks nothing"
 
-    readers = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(call, ast.Call)
-            and ast.unparse(call.func) in {"get_provider", "_market_tools"}
-            for call in ast.walk(node)
-        )
-    ]
-    assert len(readers) >= 4, (
-        f"only {len(readers)} functions in market_data.py reach the provider; "
-        "this test is checking almost nothing"
-    )
+    uncached, unbounded = [], []
+    for node in functions:
+        decorators = [ast.unparse(decorator) for decorator in node.decorator_list]
+        data = [text for text in decorators if text.startswith("st.cache_data")]
+        if not data and not any(text.startswith("st.cache_resource") for text in decorators):
+            uncached.append(node.name)
+        elif data and not any(("ttl=" in text or "max_entries=" in text) for text in data):
+            unbounded.append(node.name)
 
-    uncached = [
-        node.name
-        for node in readers
-        if not any(
-            ast.unparse(decorator).startswith(("st.cache_data", "st.cache_resource"))
-            for decorator in node.decorator_list
-        )
-    ]
     assert not uncached, (
-        f"these read the provider on every rerun with no cache: {uncached}. "
-        "Add st.cache_data (with a ttl or max_entries) or st.cache_resource."
+        f"these run on every rerun with no cache: {uncached}. Add st.cache_data "
+        "(with a ttl or max_entries) or st.cache_resource."
+    )
+    assert not unbounded, (
+        f"these cache without a ttl or max_entries and grow forever: {unbounded}"
     )
 
 
