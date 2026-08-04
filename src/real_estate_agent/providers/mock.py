@@ -22,16 +22,46 @@ _SEED = 1337
 _TODAY = date(2026, 7, 31)
 
 _MARKETS = [
-    # (city, state, zip, center lat/lon, base $/sqft)
-    ("Austin", "TX", "78704", 30.2500, -97.7594, 545),
-    ("Austin", "TX", "78745", 30.2100, -97.7900, 415),
-    ("Round Rock", "TX", "78664", 30.5083, -97.6789, 305),
+    # (city, state, zip, center lat/lon, base $/sqft, lat jitter, lon jitter)
+    #
+    # Two islands, priced far apart on purpose, so budget feasibility has
+    # something real to bite on. The Honolulu ZIPs are ~2.1 miles apart, so the
+    # 1.5-mile default comp radius mostly separates them -- "mostly" because the
+    # jitter below lets a small tail of cross-ZIP pairs fall inside it. Hilo is
+    # on Hawaii island, 200+ miles away, so it cannot contaminate an Oahu comp
+    # set at any radius a CMA would use; the inter-island gap does that job for
+    # free, with no filter required.
+    #
+    # The jitter is per-market because one box does not fit these three. Waikiki
+    # is a ~0.35-mile strip pinned between the Ala Wai Canal and the shoreline,
+    # so the +/-0.007 box the mainland dataset used put six of its twenty-two
+    # listings in the Pacific -- which `st.map` on the market page renders
+    # faithfully, on the one page with no model in the loop to explain it.
+    ("Honolulu", "HI", "96815", 21.2795, -157.8292, 850, 0.0045, 0.0065),  # Waikiki
+    ("Honolulu", "HI", "96816", 21.2836, -157.7967, 780, 0.0045, 0.0055),  # Kaimuki
+    ("Hilo", "HI", "96720", 19.7220, -155.0870, 320, 0.0070, 0.0080),
 ]
 
-_STREETS = [
-    "Bluebonnet", "Live Oak", "Barton Springs", "Cypress", "Mesquite",
-    "Pecan Grove", "Shoal Creek", "Travis Heights", "Wildflower", "Riverbend",
-]
+# Keyed by ZIP, not shared: a single pool put Kalakaua (the Waikiki street) in
+# Hilo and Banyan (Hilo) in Waikiki, which reads as obviously synthetic to
+# anyone who knows the islands. Each list is exactly ten entries on purpose --
+# `random.choice` rejection-samples through `_randbelow(len(seq))`, so a list of
+# a different length consumes a different number of raw draws and shifts every
+# subsequent value in the dataset. Change the names freely; keep the count.
+_STREETS = {
+    "96815": [  # Waikiki
+        "Kalakaua Ave", "Kuhio Ave", "Ala Wai Blvd", "Seaside Ave", "Lewers St",
+        "Kaiulani Ave", "Beach Walk", "Nohonani St", "Olohana St", "Paoakalani Ave",
+    ],
+    "96816": [  # Kaimuki / Diamond Head
+        "Waialae Ave", "Koko Head Ave", "Wilhelmina Rise", "Pahoa Ave", "Kilauea Ave",
+        "Harding Ave", "Sierra Dr", "Palolo Ave", "Maunaloa Ave", "Diamond Head Rd",
+    ],
+    "96720": [  # Hilo
+        "Kinoole St", "Waianuenue Ave", "Kapiolani St", "Ponahawai St", "Haili St",
+        "Komohana St", "Puainako St", "Kamehameha Ave", "Banyan Dr", "Kilauea Ave",
+    ],
+}
 
 _PROPERTY_TYPES = ["single_family", "condo", "townhouse"]
 
@@ -42,7 +72,7 @@ def _build_dataset() -> list[Listing]:
     listings: list[Listing] = []
     counter = 1000
 
-    for city, state, zip_code, lat, lon, base_ppsf in _MARKETS:
+    for city, state, zip_code, lat, lon, base_ppsf, d_lat, d_lon in _MARKETS:
         for _ in range(22):
             counter += 1
             property_type = rng.choice(_PROPERTY_TYPES)
@@ -50,10 +80,18 @@ def _build_dataset() -> list[Listing]:
             baths = rng.choice([1.5, 2.0, 2.0, 2.5, 3.0, 3.5])
             # Tight sigma on purpose: real markets cluster by size, and a wide
             # spread over a small dataset leaves every subject without a
-            # size-matched comp, so no CMA is ever possible.
-            sqft = int(rng.gauss(380 * beds + 520, 130))
-            sqft = max(720, min(sqft, 4200))
-            year_built = rng.choice([1958, 1972, 1985, 1998, 2006, 2015, 2021])
+            # size-matched comp, so no CMA is ever possible. Hawaii homes run
+            # materially smaller than mainland ones, so both the intercept and
+            # the slope are modest -- but what matters to the +/-30% size screen
+            # is the *ratio*, not the absolute sigma, so sigma is set to hold the
+            # coefficient of variation near 8%. Retune the two together or comp
+            # availability moves without anything looking wrong.
+            sqft = int(rng.gauss(300 * beds + 350, 100))
+            sqft = max(600, min(sqft, 3200))
+            # Waikiki's condo towers and Hilo's plantation-era stock both sit at
+            # the old end; the two post-2015 values keep the new-build premium
+            # below reachable, and the two pre-1975 values the age discount.
+            year_built = rng.choice([1941, 1963, 1978, 1992, 2004, 2016, 2023])
 
             # Price anchors on $/sqft, then flexes for age and property type.
             ppsf = base_ppsf * rng.uniform(0.88, 1.14)
@@ -98,8 +136,14 @@ def _build_dataset() -> list[Listing]:
             listings.append(
                 Listing(
                     listing_id=f"MLS-{counter}",
-                    address=f"{rng.randint(100, 9900)} {rng.choice(_STREETS)} "
-                    f"{rng.choice(['St', 'Ave', 'Dr', 'Ln'])}",
+                    # The suffix is part of the name, not a separate draw. Drawn
+                    # independently it produced "Kalakaua St" and "Ala Wai Ln"
+                    # for streets that are an Ave and a Blvd, and could never
+                    # produce Beach Walk or Wilhelmina Rise at all -- invisible
+                    # with invented mainland names, wrong the moment the names
+                    # became real ones. Range capped at 3900 for the same
+                    # reason: none of these streets is numbered into the 9000s.
+                    address=f"{rng.randint(100, 3900)} {rng.choice(_STREETS[zip_code])}",
                     city=city,
                     state=state,
                     zip_code=zip_code,
@@ -110,20 +154,25 @@ def _build_dataset() -> list[Listing]:
                     # Clamped like sqft above: an unclamped Gaussian goes
                     # negative below -2.7 sigma, and a negative lot size flows
                     # straight into the CMA's lot-size adjustment row.
-                    lot_sqft=max(1200, int(rng.gauss(7000, 2600)))
+                    lot_sqft=max(1500, int(rng.gauss(6000, 2200)))
                     if property_type != "condo"
                     else 0,
                     year_built=year_built,
                     property_type=property_type,
                     status=status,
                     days_on_market=days_on_market,
-                    # ~±0.5 mi of the ZIP centroid, so a realistic 1-1.5 mile
-                    # comp radius actually returns intra-ZIP neighbours.
-                    latitude=round(lat + rng.uniform(-0.007, 0.007), 6),
-                    longitude=round(lon + rng.uniform(-0.008, 0.008), 6),
+                    # Per-market box (see _MARKETS), sized so a realistic
+                    # 1-1.5 mile comp radius returns intra-ZIP neighbours
+                    # without scattering listings outside the ZIP's real extent.
+                    latitude=round(lat + rng.uniform(-d_lat, d_lat), 6),
+                    longitude=round(lon + rng.uniform(-d_lon, d_lon), 6),
                     sold_price=sold_price,
                     sold_date=sold_date.isoformat() if sold_date else None,
-                    hoa_monthly=rng.choice([0, 0, 45, 120, 340])
+                    # No zero here, unlike the mainland dataset: a Hawaii condo
+                    # or townhouse without an association fee does not exist,
+                    # and the maintenance fee is large enough relative to price
+                    # that a buyer's affordability answer is wrong without it.
+                    hoa_monthly=rng.choice([165, 285, 480, 720, 1150])
                     if property_type != "single_family"
                     else 0,
                     description=(

@@ -1,6 +1,6 @@
 """CLI for the real estate agent.
 
-    uv run python main.py "Find 3-bed homes in Austin under $700k"
+    uv run python main.py "Find 3-bed homes in Hilo under $600k"
     uv run python main.py                      # interactive
     uv run python main.py --require-approval   # pause before saving drafts
     uv run python main.py --thread <id>        # continue a checkpointed thread

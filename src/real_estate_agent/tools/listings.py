@@ -40,8 +40,8 @@ def make_listing_tools(provider: ListingsProvider) -> list[BaseTool]:
         these results individually.
 
         Args:
-            city: City name, e.g. "Austin".
-            state: Two-letter state code, e.g. "TX".
+            city: City name, e.g. "Honolulu".
+            state: Two-letter state code, e.g. "HI".
             min_price: Minimum list price in whole dollars.
             max_price: Maximum list price in whole dollars.
             min_beds: Minimum bedroom count.

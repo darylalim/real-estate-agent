@@ -35,11 +35,13 @@ from ui.agent_session import (
 from ui.elements import lazy_expander, stable_key
 
 SUGGESTIONS = {
-    "Find homes": "Find 3-bed homes in Round Rock under $600k and build me a shortlist.",
+    "Find homes": "Find 3-bed homes in Hilo under $600k and build me a shortlist.",
     "Value a property": "What is MLS-1022 worth? Run a CMA and write it to the workspace.",
-    "Read the market": "Is Austin a buyer's or a seller's market right now, and how do you know?",
+    "Read the market": (
+        "Is Honolulu a buyer's or a seller's market right now, and how do you know?"
+    ),
     "Qualify a lead": (
-        "Qualify this lead: Jane Doe, wants Round Rock, budget $550k, "
+        "Qualify this lead: Jane Doe, wants Hilo, budget $550k, "
         "pre-approved, buying in 2 months, needs 3 beds. Then draft her a follow-up email."
     ),
 }

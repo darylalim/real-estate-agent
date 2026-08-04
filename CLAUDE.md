@@ -21,7 +21,7 @@ derived by following them — so a change made without loading the skill is like
 uv sync                                          # install (Python pinned to 3.14 by .python-version)
 cp .env.example .env                             # then add ANTHROPIC_API_KEY
 
-uv run python main.py "Find 3-bed homes in Round Rock under $600k"
+uv run python main.py "Find 3-bed homes in Hilo under $600k"
 uv run python main.py                            # interactive
 uv run python main.py --require-approval         # pause before save_draft
 uv run python main.py --thread <id>              # continue a conversation (persisted to workspace/)
@@ -319,6 +319,16 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   recency filter read it, so they cannot drift and silently disable the close-date screen. Changing it, or the
   square-footage sigma, shifts comp availability — `test_most_listings_have_a_usable_comp_set` asserts ≥60% of
   active listings clear the 3-comp minimum.
+- **The mock's *draw count* is load-bearing, not just its seed.** `_build_dataset` is reproducible because a
+  fixed seed is consumed in a fixed order, so changing the *parameters* of an `rng` call is safe while changing
+  the *number* of calls reshuffles every listing after it. Two traps: `random.choice` rejection-samples through
+  `_randbelow(len(seq))`, so a list of a different length consumes a different number of raw draws — which is
+  why the three `_STREETS` lists are each exactly ten entries — and the `lot_sqft` and `hoa_monthly` draws are
+  *conditional* on `property_type`, so they are not a constant offset. Measured: folding the street suffix into
+  the name removed one draw per listing and moved the status split from 35/27/4 to 26/29/11, which broke the
+  price-asymmetry invariant and put 29 cross-ZIP comps where there had been one. Nothing raised. If you must
+  change the draw count, re-derive in the same commit: the ≥60% comp share, the asymmetry thresholds in
+  `test_expensive_market_can_return_nothing`, and every dataset number written into `README.md`.
 - **`main.py` must pass a checkpointer explicitly; the `build_agent` default is per-process.** `build_agent`
   falls back to `InMemorySaver()`, which is right for tests and wrong for the CLI — with it, `--thread <id>`
   resumed nothing across runs and the only symptom was a printed id that looked like it meant something.

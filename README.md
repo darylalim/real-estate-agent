@@ -13,7 +13,7 @@ its own context window, and a shared `/workspace/` filesystem.
 ```bash
 cp .env.example .env          # add your ANTHROPIC_API_KEY
 uv sync                       # Python 3.14, pinned by .python-version
-uv run python main.py "Find 3-bed homes in Round Rock under $600k"
+uv run python main.py "Find 3-bed homes in Hilo under $600k"
 ```
 
 Interactive mode:
@@ -135,9 +135,21 @@ from real_estate_agent import build_agent
 agent = build_agent(provider=MyMlsProvider(api_key=...))
 ```
 
-The mock models two deliberately different markets (Austin 78704/78745 at
-$504k–$1.51M, Round Rock at $264k–$777k) so budget-feasibility logic has
-something real to bite on.
+The mock models two deliberately different Hawaii markets (Honolulu 96815/96816
+at $839k–$1.71M active, median $1.25M and $807/sqft; Hilo 96720 at $259k–$653k,
+median $536k and $319/sqft) so budget-feasibility logic has something real to
+bite on. The two Honolulu ZIPs sit ~2.1 miles apart, so the default 1.5-mile
+comp radius mostly separates them — mostly, because the per-ZIP coordinate
+jitter lets a small tail of cross-ZIP pairs fall inside it. Hilo is on another
+island and cannot contaminate an Oahu comp set at any radius a CMA would use.
+
+Addresses carry their real street type (`Kalakaua Ave`, `Beach Walk`,
+`Wilhelmina Rise`) rather than a suffix drawn at random, and street names are
+scoped to their ZIP — Waikiki names in 96815, Kaimuki in 96816, Hilo in 96720.
+Coordinate jitter is per-market for the same reason: Waikiki is a ~0.35-mile
+strip between the Ala Wai Canal and the shoreline, and a box sized for a
+sprawling mainland ZIP put six of its listings in the Pacific, which the market
+page's `st.map` rendered faithfully.
 
 ## Skills vs. prompts
 
@@ -261,7 +273,7 @@ Three defects the CLI run above exposed, since fixed:
   thin market.
 - The mock spread square footage too widely for a 66-listing dataset, so small
   properties had no size-matched comps and no CMA was possible. Sizes now
-  cluster; 28 of 35 active listings clear the 3-comp minimum, and the other 7
+  cluster; 23 of 26 active listings clear the 3-comp minimum, and the other 3
   remain genuine outliers so the insufficient-comps path stays reachable.
 - client-liaison had two ways to write a draft and used both, producing
   divergent copies. `save_draft` is now the only sanctioned path.

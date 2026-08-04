@@ -125,11 +125,11 @@ def test_every_advertised_filter_value_exists_in_the_dataset(
 
 def test_search_respects_filters(provider: MockListingsProvider) -> None:
     results = provider.search(
-        city="Round Rock", max_price=600_000, min_beds=3, status="active"
+        city="Hilo", max_price=600_000, min_beds=3, status="active"
     )
     assert results
     for listing in results:
-        assert listing.city == "Round Rock"
+        assert listing.city == "Hilo"
         assert listing.price <= 600_000
         assert listing.beds >= 3
         assert listing.status == "active"
@@ -138,12 +138,18 @@ def test_search_respects_filters(provider: MockListingsProvider) -> None:
 def test_expensive_market_can_return_nothing(provider: MockListingsProvider) -> None:
     """The two markets are priced apart on purpose.
 
-    Austin 78704/78745 runs well above Round Rock, so a modest budget clears no
-    Austin inventory. That asymmetry is what makes `qualify_lead`'s feasibility
+    Honolulu 96815/96816 runs well above Hilo, so a modest budget clears no
+    Honolulu inventory. That asymmetry is what makes `qualify_lead`'s feasibility
     check meaningful — an empty result is a real answer, not a bug.
+
+    $550k is "modest" on these islands, not the mainland figure it replaced:
+    Honolulu's cheapest 3-bed is well over $800k. The threshold is deliberately
+    clear of the boundary on both sides — Hilo returns several here, not one, so
+    a later retune of the price model fails this on the property it is about
+    rather than on a single listing drifting across the line.
     """
-    assert provider.search(city="Austin", max_price=450_000, min_beds=3) == []
-    assert provider.search(city="Round Rock", max_price=450_000, min_beds=3)
+    assert provider.search(city="Honolulu", max_price=550_000, min_beds=3) == []
+    assert provider.search(city="Hilo", max_price=550_000, min_beds=3)
 
 
 def test_unknown_listing_returns_none(provider: MockListingsProvider) -> None:
@@ -274,11 +280,11 @@ def test_document_extraction_reads_a_real_file(tmp_path, monkeypatch) -> None:
 
 def test_search_is_case_insensitive(provider: MockListingsProvider) -> None:
     """Regression: "Active" returned zero, which reads as an empty market."""
-    assert len(provider.search(city="Austin", status="Active")) == len(
-        provider.search(city="Austin", status="active")
+    assert len(provider.search(city="Honolulu", status="Active")) == len(
+        provider.search(city="Honolulu", status="active")
     )
-    assert len(provider.search(city="AUSTIN", property_type="Condo")) == len(
-        provider.search(city="austin", property_type="condo")
+    assert len(provider.search(city="HONOLULU", property_type="Condo")) == len(
+        provider.search(city="honolulu", property_type="condo")
     )
 
 
@@ -289,10 +295,10 @@ def test_market_statistics_window_filters_the_numerator(
     produced months-of-inventory of 5.2 or 21.0 purely by changing the window."""
     tools = {tool.name: tool for tool in make_market_tools(provider)}
     short = json.loads(
-        tools["market_statistics"].invoke({"city": "Austin", "months_back": 3})
+        tools["market_statistics"].invoke({"city": "Honolulu", "months_back": 3})
     )
     long = json.loads(
-        tools["market_statistics"].invoke({"city": "Austin", "months_back": 12})
+        tools["market_statistics"].invoke({"city": "Honolulu", "months_back": 12})
     )
     assert short["closed_sales"]["count"] < long["closed_sales"]["count"]
     assert short["market"]["closed_sales_window_months"] == 3
@@ -321,7 +327,7 @@ def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall(
         tools["qualify_lead"].invoke(
             {
                 "name": "Jane",
-                "target_city": "Round Rock",
+                "target_city": "Hilo",
                 "budget_max": 2_000_000,
                 "timeline_months": 2,
                 "pre_approved": True,
@@ -387,7 +393,7 @@ def test_save_draft_emits_md_eml_and_mailto(comms_tools) -> None:
         comms_tools["save_draft"].invoke(
             {
                 "filename": "follow-up-jane",
-                "subject": "Round Rock shortlist",
+                "subject": "Hilo shortlist",
                 "body": "Six listings match your criteria.",
                 "to": "jane@example.com",
             }
@@ -401,14 +407,14 @@ def test_save_draft_emits_md_eml_and_mailto(comms_tools) -> None:
 
     raw = eml.read_text(encoding="utf-8")
     assert "To: jane@example.com" in raw
-    assert "Subject: Round Rock shortlist" in raw
+    assert "Subject: Hilo shortlist" in raw
     # Makes a mail client open this as an editable draft, not a received message.
     assert "X-Unsent: 1" in raw
     # Absence of From/Date is deliberate — it keeps the message clearly unsent.
     assert "\nFrom:" not in raw
 
     assert payload["mailto_url"].startswith("mailto:jane%40example.com?")
-    assert "Round%20Rock%20shortlist" in payload["mailto_url"]
+    assert "Hilo%20shortlist" in payload["mailto_url"]
 
 
 def test_save_draft_omits_mailto_when_body_too_long(comms_tools) -> None:
@@ -1183,7 +1189,7 @@ def test_the_listings_table_drops_columns_rather_than_masking_them() -> None:
             f"{name} is dropped and also masked in column_config — one of the two is stale"
         )
 
-    frame = listings_frame("Round Rock", "TX", None, "active")
+    frame = listings_frame("Hilo", "HI", None, "active")
     assert not frame.empty, "fixture market went empty; the column check below proves nothing"
     missing = [name for name in dropped if name not in frame.columns]
     assert not missing, f"_NOT_IN_THE_TABLE names columns that do not exist: {missing}"

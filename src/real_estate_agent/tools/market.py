@@ -160,8 +160,8 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
         pricing pressure and days-on-market, not just a single listing.
 
         Args:
-            city: City name, e.g. "Austin".
-            state: Two-letter state code, e.g. "TX".
+            city: City name, e.g. "Honolulu".
+            state: Two-letter state code, e.g. "HI".
             property_type: Optionally restrict to one of "single_family",
                 "condo", "townhouse".
             months_back: Window for closed-sale statistics.

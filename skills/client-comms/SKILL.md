@@ -34,7 +34,7 @@ detail belongs in an attached document with the message pointing at it.
 ### Lead follow-up (post-qualification)
 
 ```
-Subject: <specific — "3 homes in 78704 under $650k", not "Following up">
+Subject: <specific — "3 homes in 96720 under $600k", not "Following up">
 
 <Name> — based on what you told me (<budget>, <area>, <timeline>), here is
 where things stand.
