@@ -10,6 +10,14 @@ exactly the way ``main.py`` is.
 """
 
 import streamlit as st
+from dotenv import load_dotenv
+
+# Before `page.run()`, which is the first thing here that imports
+# `real_estate_agent.config` -- and that module reads REA_MODEL and
+# REA_PROJECT_ROOT at import time, so loading `.env` afterwards would be too
+# late. Nothing above imports the package, so unlike `main.py` this file needs
+# no special ordering to get it right; it just must not grow one.
+load_dotenv()
 
 st.set_page_config(
     page_title="Real estate agent",

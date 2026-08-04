@@ -3,16 +3,35 @@
 Every path the agent is allowed to touch is derived from ``PROJECT_ROOT`` here,
 so the filesystem backend and the document tools share one notion of "inside
 the project".
+
+**This module does not read ``.env``, and must not.** It used to call
+``load_dotenv()`` right here, which made importing the package -- something the
+test suite does on every run -- quietly apply a developer's personal
+configuration. That is how the whole suite ended up tracing to LangSmith: one
+import turned ``LANGSMITH_TRACING=true`` on for 17 billable root runs per run.
+``REA_MODEL`` and ``REA_PROJECT_ROOT`` leaked by the same route and are worse,
+because they reconfigure the graph and the file roots the tests assert against
+without changing anything a test can see.
+
+Loading ``.env`` belongs to the entry points -- ``main.py`` and
+``streamlit_app.py`` -- and the ordering there is load-bearing rather than
+tidy-looking. The three values below are read from the environment **at import
+time**, so an entry point has to load ``.env`` before importing this module, not
+merely before calling into it. ``main.py`` does that by keeping both the call
+and its ``real_estate_agent`` imports inside ``main()``;
+``streamlit_app.py`` gets it for free, since it imports no page module until
+``page.run()``. ``test_each_entry_point_loads_dotenv_before_the_package`` pins
+both, and ``test_config_does_not_load_dotenv_at_import`` pins this file.
+
+The consequence for library use is deliberate: ``from real_estate_agent import
+build_agent`` no longer picks up ``.env`` by itself, so a caller embedding the
+package supplies the environment the way any other library expects.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # parents[2] is correct for an editable src-layout checkout. Installed
 # non-editable it would resolve into site-packages, silently rooting the agent

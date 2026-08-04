@@ -1469,6 +1469,92 @@ def test_ty_fails_the_build_on_warnings() -> None:
     assert _pyproject()["tool"]["ty"]["terminal"]["error-on-warning"] is True
 
 
+def _dotenv_calls(tree: ast.AST) -> list[ast.Call]:
+    """Every `load_dotenv(...)` call in ``tree``, at any depth."""
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "load_dotenv"
+    ]
+
+
+def _package_imports(tree: ast.AST) -> list[ast.ImportFrom]:
+    """Every `from real_estate_agent... import ...`, at any depth."""
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("real_estate_agent")
+    ]
+
+
+def test_config_does_not_load_dotenv_at_import() -> None:
+    """A library module reading `.env` at import applies it to every consumer.
+
+    `config.py` used to call `load_dotenv()` at module scope, so importing the
+    package — which this suite does on every run — silently adopted a
+    developer's personal configuration. `LANGSMITH_TRACING` was the expensive
+    one: 17 billable root runs per run, on a suite documented as offline.
+    `REA_MODEL` and `REA_PROJECT_ROOT` are the quiet ones, and worse in kind.
+    The first hands `build_agent()` a different model, and CLAUDE.md's own note
+    says the middleware stack resolves from a per-`provider:model` profile, so
+    `test_agent_exposes_planning_and_delegation` would assert against a graph CI
+    never builds. The second repoints `PROJECT_ROOT`, which anchors
+    `_pyproject`, `_documented_pins`, `_check_script_pin` and the documented
+    count — the whole toolchain cluster would read another checkout's files and
+    still pass or fail for reasons no one could see from here.
+
+    Reads the tree rather than the imported module: `config.load_dotenv` would
+    also be absent if the name were merely rebound, and the question is whether
+    the *call* is in the source at all.
+    """
+    tree = ast.parse((PROJECT_ROOT / "src" / "real_estate_agent" / "config.py").read_text("utf-8"))
+    assert not _dotenv_calls(tree), (
+        "config.py calls load_dotenv() again. Importing the package then applies "
+        "a developer's .env to every consumer, the test suite included. Load it "
+        "in main.py and streamlit_app.py instead."
+    )
+
+
+def test_each_entry_point_loads_dotenv_before_the_package() -> None:
+    """Loading `.env` after the import is too late, and looks identical.
+
+    `PROJECT_ROOT`, `DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated when
+    `config.py` is imported, not when they are read. So moving `load_dotenv()`
+    out of that module only works if each entry point calls it *before* the
+    import — a `load_dotenv()` at the top of `main()` underneath a module-scope
+    `from real_estate_agent import build_agent` would run second and `REA_MODEL`
+    in `.env` would be ignored, with nothing to show for it but the default
+    model in the sidebar caption.
+
+    `main.py` therefore keeps both the call and its package imports inside
+    `main()`; this asserts that pairing rather than the mere presence of the
+    call. `streamlit_app.py` needs no such care because it imports no page
+    module until `page.run()` — so what is checked there is that it has not
+    since grown a package import above the call.
+    """
+    main_tree = ast.parse((PROJECT_ROOT / "main.py").read_text("utf-8"))
+    calls, imports = _dotenv_calls(main_tree), _package_imports(main_tree)
+    assert calls, "main.py must load .env; config.py no longer does it"
+    assert imports, "main.py imports the package somewhere, or this test is checking nothing"
+    assert not [node for node in main_tree.body if isinstance(node, ast.ImportFrom) and node in imports], (
+        "a module-scope real_estate_agent import in main.py runs before any "
+        "load_dotenv() this file can call, so REA_* in .env would be ignored"
+    )
+    assert min(call.lineno for call in calls) < min(node.lineno for node in imports), (
+        "main.py imports real_estate_agent before loading .env"
+    )
+
+    app_tree = ast.parse((PROJECT_ROOT / "streamlit_app.py").read_text("utf-8"))
+    app_calls = _dotenv_calls(app_tree)
+    assert app_calls, "streamlit_app.py must load .env before page.run() imports a page"
+    assert not _package_imports(app_tree), (
+        "streamlit_app.py now imports real_estate_agent directly; either move the "
+        "import below load_dotenv() or assert the ordering here as main.py does"
+    )
+
+
 def test_the_suite_does_not_trace_to_langsmith() -> None:
     """Tracing on during the suite spends a LangSmith quota and nothing reports it.
 

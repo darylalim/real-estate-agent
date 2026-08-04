@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 73 tests, ~1.3s, no API calls
+uv run pytest tests/ -q                          # full suite: 75 tests, ~1.3s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -85,13 +85,14 @@ would be checked only by ty's syntax-level view, never at runtime. `--isolated` 
 so your 3.14 venv is untouched; it costs one resolve, then ~3s. If it ever fails, the honest fix is usually to
 narrow `requires-python`, not to delete the leg.
 
-The whole suite runs offline **because `tests/conftest.py` makes it so** — it was not, and the claim on this
-line was false for the repo's first 31 commits. `test_agent_exposes_planning_and_delegation` builds the real
-graph under a dummy key to assert on wiring only, so no test reaches Anthropic; but `config.py` calls
-`load_dotenv()` at import, `.env` carries `LANGSMITH_TRACING=true`, and every `tool.invoke()` in the suite was
-therefore a LangSmith **root** run — 17 of them per run, over a network, billed against a free tier. Read the
-conftest before touching any of that; the ordering it depends on is easy to undo. There is no reason to skip
-tests for cost or network *now*, which is a different statement from the one that used to be here.
+The whole suite runs offline, and that is now **arranged rather than assumed** — it was false for the repo's
+first 31 commits. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy key to
+assert on wiring only, so no test reaches Anthropic; but `config.py` called `load_dotenv()` at import, `.env`
+carries `LANGSMITH_TRACING=true`, and every `tool.invoke()` in the suite was therefore a LangSmith **root**
+run — 17 per run, over a network, billed against a free tier. `.env` now belongs to the entry points and
+`tests/conftest.py` forces tracing off besides. Read both before touching either; the ordering they depend on
+is easy to undo. There is no reason to skip tests for cost or network *now*, which is a different statement
+from the one that used to be here.
 
 The cluster at the end of the file is of a different kind: those tests check the *toolchain config*, not the
 agent, and fail when the config and the docs disagree. Four read the live `pyproject.toml` and the pins written
@@ -345,9 +346,24 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   pins `TodoListMiddleware()` explicitly.
 - **Models need the LangChain `provider:model` prefix.** A bare `claude-opus-5` will not resolve.
   `require_api_key()` derives which key to demand from that prefix.
-- **`tests/conftest.py` must disable LangSmith tracing, and it only works from there.** `config.py` calls
-  `load_dotenv()` at import, so importing the package is enough to pull `LANGSMITH_TRACING=true` out of a real
-  `.env`. Every `tool.invoke()` in the suite then becomes a **root** run, and LangSmith bills per trace rather
+- **`.env` is loaded by the entry points, never at package import.** `config.py` used to call `load_dotenv()`
+  at module scope, which meant importing the package applied a developer's personal configuration to every
+  consumer — the test suite included. Three variables leaked and each fails differently: `LANGSMITH_TRACING`
+  is the expensive one (below), `REA_MODEL` hands `build_agent()` a model whose harness profile may resolve a
+  different middleware stack, and `REA_PROJECT_ROOT` repoints `PROJECT_ROOT`, which anchors `_pyproject`,
+  `_documented_pins`, `_check_script_pin` and the documented-count test at some other checkout's files. None
+  raises. The ordering is the subtle half: `PROJECT_ROOT`, `DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated
+  **at import**, not at use, so an entry point must load `.env` before importing the module rather than before
+  calling into it — a `load_dotenv()` at the top of `main()` under a module-scope
+  `from real_estate_agent import build_agent` runs second and is useless. `main.py` therefore keeps the call
+  and its package imports together inside `main()`; `streamlit_app.py` needs no such care because it imports
+  no page module until `page.run()`, and the test asserts it has not grown one.
+  `test_config_does_not_load_dotenv_at_import` and
+  `test_each_entry_point_loads_dotenv_before_the_package` pin the two halves.
+- **`tests/conftest.py` must disable LangSmith tracing, and it only works from there.** With `.env` out of the
+  import path this is a second line rather than the only one — a variable exported in a shell never went
+  through `.env`, and the historical defect is worth keeping in view regardless. Every `tool.invoke()` in the
+  suite otherwise becomes a **root** run, and LangSmith bills per trace rather
   than per span — so 17 one-span traces per run cost what 17 whole agent conversations would, while a live
   turn nests all its subagent and tool spans inside a single trace for free. `done-gate.sh` runs the suite
   every turn and the floor leg runs it twice, which is how a free tier goes in a few hundred turns. Two things

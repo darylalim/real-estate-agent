@@ -14,12 +14,14 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
+from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
-from real_estate_agent import build_agent
-from real_estate_agent.config import CHECKPOINT_DB, ensure_workspace, require_api_key
+# `real_estate_agent` is imported inside `main()`, not here. See the comment
+# there: config.py reads REA_* at import time, so `.env` has to be loaded first,
+# and a module-scope import would beat any call this file could make.
 
 _TOOL_RESULT_PREVIEW = 400
 
@@ -173,6 +175,23 @@ def _turn(agent: Any, text: str, config: dict[str, Any], seen: set[str]) -> None
 
 
 def main() -> int:
+    # `.env` has to be read before `real_estate_agent.config` is *imported*, not
+    # merely before it is used: PROJECT_ROOT, DEFAULT_MODEL and SUBAGENT_MODEL
+    # are module constants evaluated at import time, so a `load_dotenv()` above
+    # a module-scope `from real_estate_agent...` would run too late and silently
+    # ignore REA_MODEL. Hence the call and the package imports both live here.
+    # config.py deliberately no longer does this itself — that made importing
+    # the package apply a developer's `.env`, which is how the test suite came
+    # to trace to LangSmith.
+    load_dotenv()
+
+    from real_estate_agent import build_agent
+    from real_estate_agent.config import (
+        CHECKPOINT_DB,
+        ensure_workspace,
+        require_api_key,
+    )
+
     parser = argparse.ArgumentParser(description="Real estate agent on Deep Agents.")
     parser.add_argument("prompt", nargs="*", help="Prompt. Omit for interactive mode.")
     parser.add_argument("--thread", default=None, help="Thread id, to continue a conversation.")

@@ -66,7 +66,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 73 tests, ~1.3s
+uv run pytest tests/ -q       # 75 tests, ~1.3s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -88,14 +88,25 @@ CI (`.github/workflows/check.yml`) runs `scripts/check.sh --floor` on Linux for 
 which is the point of having the script: one place decides what "done" means. No secrets — the suite is
 entirely offline.
 
-That last claim is now enforced rather than asserted. It used to be false: `config.py` calls `load_dotenv()` at
-import, `.env.example` documents `LANGSMITH_TRACING=true`, and so a developer with a real `.env` had every
+That last claim is now enforced rather than asserted. It used to be false: `config.py` called `load_dotenv()`
+at import, `.env.example` documents `LANGSMITH_TRACING=true`, and so a developer with a real `.env` had every
 `tool.invoke()` in the suite reporting to LangSmith as its own root run — 17 per run, against a Stop hook that
 runs the suite on every turn. LangSmith bills per trace, so those one-span traces cost the same as full agent
-conversations, and the tests quietly outspent the runs actually worth tracing. `tests/conftest.py` turns
-tracing off before the package is imported. Live runs via `main.py` and Streamlit are untouched and still
-trace normally. CI never had the problem — a clean checkout has no `.env` — which is exactly why nothing in
-the build logs revealed it.
+conversations, and the tests quietly outspent the runs actually worth tracing. CI never had the problem — a
+clean checkout has no `.env` — which is exactly why nothing in the build logs revealed it.
+
+**`.env` is now read by the entry points, not by the package.** Import-time `load_dotenv()` in a library module
+applies one developer's configuration to every consumer, and the trace bill was only its most expensive
+symptom; `REA_MODEL` silently handed the tests a different graph and `REA_PROJECT_ROOT` silently repointed the
+file roots they assert against. `main.py` and `streamlit_app.py` load it instead, and the ordering is
+load-bearing rather than cosmetic — `PROJECT_ROOT`, `DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated when
+`config.py` is imported, so `main.py` keeps the call *and* its package imports inside `main()`. One consequence
+worth knowing before embedding the package: `from real_estate_agent import build_agent` no longer picks up
+`.env` on its own, and a caller supplies the environment the way any other library expects.
+
+`tests/conftest.py` still forces tracing off, now as a second line rather than the only one, since a variable
+exported in a shell never went through `.env` at all. Live runs via `main.py` and Streamlit are untouched and
+trace normally.
 
 That last point is also what made the first guard useless, and it is worth knowing before trusting this one.
 `test_the_suite_does_not_trace_to_langsmith` originally asserted only that tracing was off, which is true by
