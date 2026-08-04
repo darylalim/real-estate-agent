@@ -49,13 +49,27 @@ Comp inferior → add.
 | Garage space | $5,000–$12,000 per bay | Comp has more → subtract |
 | Lot size | Local land rate × difference | Comp larger → subtract |
 | Age / condition | 0.5%–1% of value per 10 years | Comp newer → subtract |
-| HOA burden | Capitalise the monthly delta | Comp lower fee → subtract |
+| HOA burden | ~100× the monthly delta | Comp lower fee → subtract |
 
 The living-area damping matters: a home twice the size is not worth twice as
 much, so applying raw $/sqft to a large size gap overstates the adjustment.
 
+The HOA multiplier is stated rather than left to judgement because the row is
+often the largest single adjustment in condo and townhouse markets, and a
+capitalisation basis you pick per comp is not a method. Where fees run high — a
+$400/month delta is $40,000 of value at this basis — say the basis out loud in
+your report so the number can be checked.
+
 **Net vs gross.** Track both. If gross adjustments exceed ~25% of a comp's sale
 price, that comp is too dissimilar — drop it and say why.
+
+**Exempt the HOA row from that 25% test.** A large fee delta means the two
+properties carry different ownership costs, not that they are different
+properties: a same-building, same-size, same-vintage comp is the *best* comp
+available even when its fee differs by $600/month. Include the HOA row in the
+adjusted value and exclude it from the gross-adjustment total you screen on.
+Without this the test drops the closest comps in exactly the markets where fees
+matter most, and a CMA built from what survives looks defensible and is not.
 
 ## Reconciliation
 
@@ -83,8 +97,8 @@ Write to `/workspace/cma-<listing-id>.md`:
 <beds/baths, sqft, year built, current list price if any, $/sqft>
 
 ## Comparable Sales
-| Address | Sold | Price | $/sqft | Sqft | Beds | Net adj. | Adjusted |
-|---|---|---|---|---|---|---|---|
+| Address | Sold | Price | $/sqft | Sqft | Beds | HOA/mo | Net adj. | Adjusted |
+|---|---|---|---|---|---|---|---|---|
 
 ## Adjustments Applied
 <Per comp: which features were adjusted, how much, and why.>

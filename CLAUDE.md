@@ -329,6 +329,18 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   price-asymmetry invariant and put 29 cross-ZIP comps where there had been one. Nothing raised. If you must
   change the draw count, re-derive in the same commit: the ≥60% comp share, the asymmetry thresholds in
   `test_expensive_market_can_return_nothing`, and every dataset number written into `README.md`.
+- **The fixture is sold-heavy on purpose, and that is what makes months-of-inventory readable.** MOI divides
+  standing inventory by the monthly rate of a *year* of sales, so at a 12-month window it is
+  `12 × active / sold` — a market at four months needs roughly three closed records per active one. No
+  status split near 50/50 can express that at any dataset size, which is why the earlier 45/13/42 reported
+  10–11 months for Honolulu, a city that has run 3–5 for years. The arithmetic in `market_statistics` was
+  never wrong; the fixture simply had no year of sales behind it. `_PER_MARKET` is 36 rather than 22 for the
+  same reason — holding that ratio at the old size left Hilo with four active listings to search.
+- **Test thresholds that sit on a boundary test the boundary, not the behaviour.**
+  `test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall` needs `meets_requirements / total_active`
+  under the tool's 0.25 cut. Its old Hilo/5-bed pairing landed on exactly 0.250 after a reshuffle and failed
+  on a `<` — the signal it asserts was correct throughout. Prefer an input with room on both sides, and say in
+  the docstring what the margin is, so the next retune fails for a real reason.
 - **`main.py` must pass a checkpointer explicitly; the `build_agent` default is per-process.** `build_agent`
   falls back to `InMemorySaver()`, which is right for tests and wrong for the CLI — with it, `--thread <id>`
   resumed nothing across runs and the only symptom was a printed id that looked like it meant something.

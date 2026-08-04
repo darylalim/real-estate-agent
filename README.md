@@ -136,20 +136,38 @@ agent = build_agent(provider=MyMlsProvider(api_key=...))
 ```
 
 The mock models two deliberately different Hawaii markets (Honolulu 96815/96816
-at $839k–$1.71M active, median $1.25M and $807/sqft; Hilo 96720 at $259k–$653k,
-median $536k and $319/sqft) so budget-feasibility logic has something real to
+at $566k–$1.28M active, median $915k and $768/sqft; Hilo 96720 at $257k–$642k,
+median $455k and $329/sqft) so budget-feasibility logic has something real to
 bite on. The two Honolulu ZIPs sit ~2.1 miles apart, so the default 1.5-mile
 comp radius mostly separates them — mostly, because the per-ZIP coordinate
 jitter lets a small tail of cross-ZIP pairs fall inside it. Hilo is on another
 island and cannot contaminate an Oahu comp set at any radius a CMA would use.
 
+Everything that differs between ZIPs lives on one `_Market` record, because a
+single global value was wrong for at least one of the three:
+
+- **Property mix.** 96815 is Waikiki — a wall of condo towers with essentially
+  no detached housing — while 96720 is overwhelmingly single-family. A uniform
+  draw put 2,100-sqft single-family homes on Seaside Ave.
+- **Coordinate jitter.** Waikiki is a ~0.35-mile strip between the Ala Wai Canal
+  and the shoreline, and a box sized for a sprawling mainland ZIP put six of its
+  listings in the Pacific, which the market page's `st.map` rendered faithfully.
+- **Association fee.** Derived from size and market rather than drawn from a
+  flat menu. Uncorrelated, it put $165/mo on a $1.3M Waikiki condo and $1,150/mo
+  on a $380k Hilo one — and at Hawaii's fee levels that drives the affordability
+  answer rather than decorating it.
+
 Addresses carry their real street type (`Kalakaua Ave`, `Beach Walk`,
 `Wilhelmina Rise`) rather than a suffix drawn at random, and street names are
-scoped to their ZIP — Waikiki names in 96815, Kaimuki in 96816, Hilo in 96720.
-Coordinate jitter is per-market for the same reason: Waikiki is a ~0.35-mile
-strip between the Ala Wai Canal and the shoreline, and a box sized for a
-sprawling mainland ZIP put six of its listings in the Pacific, which the market
-page's `st.map` rendered faithfully.
+scoped to their ZIP.
+
+The dataset is deliberately sold-heavy — ~68% closed, ~22% active — because
+months-of-inventory divides standing inventory by the monthly rate of a *year*
+of sales, so a market at four months needs roughly three times as many closed
+records as active ones. The payoff is that the two markets now land on opposite
+sides of the interpretation threshold: Honolulu reads 2.8 months (seller's) and
+Hilo 6.5 (buyer's), where the previous fixture reported a deep buyer's market
+for both and never exercised the other branch.
 
 ## Skills vs. prompts
 
@@ -271,9 +289,9 @@ Three defects the CLI run above exposed, since fixed:
   back comps the CMA methodology discards anyway. It now applies a size screen
   and reports what it filtered, so a thin comp set is distinguishable from a
   thin market.
-- The mock spread square footage too widely for a 66-listing dataset, so small
+- The mock spread square footage too widely for the dataset size, so small
   properties had no size-matched comps and no CMA was possible. Sizes now
-  cluster; 23 of 26 active listings clear the 3-comp minimum, and the other 3
+  cluster; 21 of 25 active listings clear the 3-comp minimum, and the other 4
   remain genuine outliers so the insufficient-comps path stays reachable.
 - client-liaison had two ways to write a draft and used both, producing
   divergent copies. `save_draft` is now the only sanctioned path.

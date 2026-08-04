@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from real_estate_agent.providers.base import Listing
@@ -21,49 +22,101 @@ _SEED = 1337
 # close-date screen.
 _TODAY = date(2026, 7, 31)
 
+# Listings generated per market. Deliberately sold-heavy overall (see the status
+# bands in _build_dataset): months-of-inventory compares standing inventory
+# against a *year* of sales, so a market at 4 months needs roughly three times as
+# many closed records as active ones. Holding that ratio while keeping active
+# inventory large enough to search is what sets this number -- at 22 per market
+# the same ratio left Hilo with four active listings.
+_PER_MARKET = 36
+
+
+def _pool(**counts: int) -> tuple[str, ...]:
+    """A weighted draw pool: ``_pool(condo=18, townhouse=2)`` is 90% condo.
+
+    Drawn from uniformly, so the weights are just repetition. Each market's pool
+    is twenty entries, which makes a count read directly as a percentage.
+    """
+    return tuple(name for name, count in counts.items() for _ in range(count))
+
+
+@dataclass(frozen=True)
+class _Market:
+    """One submarket. Everything that differs between ZIPs lives here.
+
+    A tuple was fine for four fields and unreadable at nine. The fields that
+    earned their place are the ones where a single global value was wrong for at
+    least one of these three ZIPs -- jitter, property mix, and association fee.
+    """
+
+    city: str
+    state: str
+    zip_code: str
+    latitude: float
+    longitude: float
+    base_ppsf: int
+    # Half-width of the coordinate box, in degrees. Per-market because one box
+    # does not fit these three: Waikiki is a ~0.35-mile strip pinned between the
+    # Ala Wai Canal and the shoreline, so the +/-0.007 box inherited from a
+    # sprawling mainland ZIP put six of its listings in the Pacific -- which
+    # `st.map` on the market page renders faithfully, on the one page with no
+    # model in the loop to explain it.
+    jitter_lat: float
+    jitter_lon: float
+    # Monthly association fee per square foot. Oahu's high-rise stock carries
+    # roughly $0.65/sqft/mo; Hilo's is about half that. Derived rather than drawn
+    # from a flat menu, because an uncorrelated fee put $165/mo on a $1.3M
+    # Waikiki condo and $1,150/mo on a $380k Hilo one -- and at this magnitude
+    # the fee drives the affordability answer rather than decorating it.
+    hoa_psf: float
+    # Scoped to the ZIP: a shared pool put Kalakaua (the Waikiki street) in Hilo
+    # and Banyan (Hilo) in Waikiki. Suffixes are part of the name, so Beach Walk
+    # and Wilhelmina Rise can exist and Kalakaua cannot come out a "St".
+    streets: tuple[str, ...]
+    # Waikiki is a wall of condo towers with essentially no detached housing;
+    # Hilo is overwhelmingly single-family. A uniform draw across all three ZIPs
+    # put 2,100-sqft single-family homes on Seaside Ave.
+    types: tuple[str, ...]
+
+
+# Two islands, priced far apart on purpose, so budget feasibility has something
+# real to bite on. The Honolulu ZIPs are ~2.1 miles apart, so the 1.5-mile
+# default comp radius mostly separates them -- "mostly" because the jitter lets a
+# small tail of cross-ZIP pairs fall inside it. Hilo is on Hawaii island, 200+
+# miles away, so it cannot contaminate an Oahu comp set at any radius a CMA would
+# use; the inter-island gap does that job for free, with no filter required.
 _MARKETS = [
-    # (city, state, zip, center lat/lon, base $/sqft, lat jitter, lon jitter)
-    #
-    # Two islands, priced far apart on purpose, so budget feasibility has
-    # something real to bite on. The Honolulu ZIPs are ~2.1 miles apart, so the
-    # 1.5-mile default comp radius mostly separates them -- "mostly" because the
-    # jitter below lets a small tail of cross-ZIP pairs fall inside it. Hilo is
-    # on Hawaii island, 200+ miles away, so it cannot contaminate an Oahu comp
-    # set at any radius a CMA would use; the inter-island gap does that job for
-    # free, with no filter required.
-    #
-    # The jitter is per-market because one box does not fit these three. Waikiki
-    # is a ~0.35-mile strip pinned between the Ala Wai Canal and the shoreline,
-    # so the +/-0.007 box the mainland dataset used put six of its twenty-two
-    # listings in the Pacific -- which `st.map` on the market page renders
-    # faithfully, on the one page with no model in the loop to explain it.
-    ("Honolulu", "HI", "96815", 21.2795, -157.8292, 850, 0.0045, 0.0065),  # Waikiki
-    ("Honolulu", "HI", "96816", 21.2836, -157.7967, 780, 0.0045, 0.0055),  # Kaimuki
-    ("Hilo", "HI", "96720", 19.7220, -155.0870, 320, 0.0070, 0.0080),
+    _Market(
+        city="Honolulu", state="HI", zip_code="96815",  # Waikiki
+        latitude=21.2795, longitude=-157.8292, base_ppsf=850,
+        jitter_lat=0.0045, jitter_lon=0.0065, hoa_psf=0.65,
+        streets=(
+            "Kalakaua Ave", "Kuhio Ave", "Ala Wai Blvd", "Seaside Ave", "Lewers St",
+            "Kaiulani Ave", "Beach Walk", "Nohonani St", "Olohana St", "Paoakalani Ave",
+        ),
+        types=_pool(condo=18, townhouse=2),
+    ),
+    _Market(
+        city="Honolulu", state="HI", zip_code="96816",  # Kaimuki / Diamond Head
+        latitude=21.2836, longitude=-157.7967, base_ppsf=780,
+        jitter_lat=0.0045, jitter_lon=0.0055, hoa_psf=0.65,
+        streets=(
+            "Waialae Ave", "Koko Head Ave", "Wilhelmina Rise", "Pahoa Ave", "Kilauea Ave",
+            "Harding Ave", "Sierra Dr", "Palolo Ave", "Maunaloa Ave", "Diamond Head Rd",
+        ),
+        types=_pool(single_family=12, condo=5, townhouse=3),
+    ),
+    _Market(
+        city="Hilo", state="HI", zip_code="96720",
+        latitude=19.7220, longitude=-155.0870, base_ppsf=320,
+        jitter_lat=0.0070, jitter_lon=0.0080, hoa_psf=0.35,
+        streets=(
+            "Kinoole St", "Waianuenue Ave", "Kapiolani St", "Ponahawai St", "Haili St",
+            "Komohana St", "Puainako St", "Kamehameha Ave", "Banyan Dr", "Kilauea Ave",
+        ),
+        types=_pool(single_family=17, condo=2, townhouse=1),
+    ),
 ]
-
-# Keyed by ZIP, not shared: a single pool put Kalakaua (the Waikiki street) in
-# Hilo and Banyan (Hilo) in Waikiki, which reads as obviously synthetic to
-# anyone who knows the islands. Each list is exactly ten entries on purpose --
-# `random.choice` rejection-samples through `_randbelow(len(seq))`, so a list of
-# a different length consumes a different number of raw draws and shifts every
-# subsequent value in the dataset. Change the names freely; keep the count.
-_STREETS = {
-    "96815": [  # Waikiki
-        "Kalakaua Ave", "Kuhio Ave", "Ala Wai Blvd", "Seaside Ave", "Lewers St",
-        "Kaiulani Ave", "Beach Walk", "Nohonani St", "Olohana St", "Paoakalani Ave",
-    ],
-    "96816": [  # Kaimuki / Diamond Head
-        "Waialae Ave", "Koko Head Ave", "Wilhelmina Rise", "Pahoa Ave", "Kilauea Ave",
-        "Harding Ave", "Sierra Dr", "Palolo Ave", "Maunaloa Ave", "Diamond Head Rd",
-    ],
-    "96720": [  # Hilo
-        "Kinoole St", "Waianuenue Ave", "Kapiolani St", "Ponahawai St", "Haili St",
-        "Komohana St", "Puainako St", "Kamehameha Ave", "Banyan Dr", "Kilauea Ave",
-    ],
-}
-
-_PROPERTY_TYPES = ["single_family", "condo", "townhouse"]
 
 
 def _build_dataset() -> list[Listing]:
@@ -72,10 +125,10 @@ def _build_dataset() -> list[Listing]:
     listings: list[Listing] = []
     counter = 1000
 
-    for city, state, zip_code, lat, lon, base_ppsf, d_lat, d_lon in _MARKETS:
-        for _ in range(22):
+    for market in _MARKETS:
+        for _ in range(_PER_MARKET):
             counter += 1
-            property_type = rng.choice(_PROPERTY_TYPES)
+            property_type = rng.choice(market.types)
             beds = rng.choice([2, 3, 3, 4, 4, 5])
             baths = rng.choice([1.5, 2.0, 2.0, 2.5, 3.0, 3.5])
             # Tight sigma on purpose: real markets cluster by size, and a wide
@@ -88,13 +141,19 @@ def _build_dataset() -> list[Listing]:
             # availability moves without anything looking wrong.
             sqft = int(rng.gauss(300 * beds + 350, 100))
             sqft = max(600, min(sqft, 3200))
+            # Beds, baths and size are drawn independently, which produced a
+            # 660-sqft two-bed with three full baths. Clamped against the size
+            # already drawn rather than redrawn, so this costs no rng call and
+            # cannot shift the stream. `baths` is not an input to the comp score,
+            # so comp sets do not move either.
+            baths = min(baths, 1.0 + 0.5 * (sqft // 350))
             # Waikiki's condo towers and Hilo's plantation-era stock both sit at
             # the old end; the two post-2015 values keep the new-build premium
             # below reachable, and the two pre-1975 values the age discount.
             year_built = rng.choice([1941, 1963, 1978, 1992, 2004, 2016, 2023])
 
             # Price anchors on $/sqft, then flexes for age and property type.
-            ppsf = base_ppsf * rng.uniform(0.88, 1.14)
+            ppsf = market.base_ppsf * rng.uniform(0.88, 1.14)
             if year_built >= 2015:
                 ppsf *= 1.08
             elif year_built <= 1975:
@@ -103,28 +162,33 @@ def _build_dataset() -> list[Listing]:
                 ppsf *= 0.9
             price = int(round(sqft * ppsf, -3))
 
-            # Just under half of inventory is recent sold comps, so CMAs have
-            # something to work with at the default 6-month window.
+            # Deliberately sold-heavy: ~68% sold, ~10% pending, ~22% active.
             #
-            # The pending band is 0.45-0.58 rather than the 0.45-0.50 it started
-            # as, because a 5% band over 66 draws has a ~3.4% chance of never
-            # firing and at seed 1337 that is exactly what happened: zero
-            # pending listings, while `search_listings` went on advertising
-            # `status="pending"` as a filter that returns an empty market.
-            # Nothing failed — the branch was simply unreachable data, and
-            # `comparables_with_diagnostics` still described `not_sold` as
-            # covering "every active and pending listing". Widened so the status
-            # the tool offers actually exists, and pinned by
-            # `test_every_advertised_filter_value_exists_in_the_dataset` so a future
-            # seed cannot quietly empty it again.
+            # This is what makes months-of-inventory read correctly. MOI divides
+            # standing inventory by the monthly rate of a *year* of sales, so at
+            # a 12-month window MOI = 12 x active / sold -- and a market at four
+            # months therefore needs three times as many closed records as active
+            # ones. The old 45/13/42 split could not express that at any dataset
+            # size: it reported 10-11 months for Honolulu, which the tool's own
+            # `interpretation_hint` labels a deep buyer's market, for a city that
+            # has run 3-5 months for years. Nothing was wrong with the
+            # arithmetic; the fixture simply had no year of sales behind it.
+            #
+            # The pending band exists at all because a narrow one silently
+            # emptied: at seed 1337 the original 5-point band never fired, and
+            # `search_listings` went on advertising `status="pending"` as a
+            # filter over a market with no homes under contract. Nothing failed
+            # -- the branch was unreachable data. Ten points now, and pinned by
+            # `test_every_advertised_filter_value_exists_in_the_dataset` so a
+            # future seed cannot quietly empty it again.
             roll = rng.random()
-            if roll < 0.45:
+            if roll < 0.68:
                 status = "sold"
                 days_back = rng.randint(5, 330)
                 sold_date = today - timedelta(days=days_back)
                 sold_price = int(round(price * rng.uniform(0.94, 1.03), -3))
                 days_on_market = rng.randint(4, 95)
-            elif roll < 0.58:
+            elif roll < 0.78:
                 status = "pending"
                 sold_date, sold_price = None, None
                 days_on_market = rng.randint(3, 40)
@@ -143,10 +207,10 @@ def _build_dataset() -> list[Listing]:
                     # with invented mainland names, wrong the moment the names
                     # became real ones. Range capped at 3900 for the same
                     # reason: none of these streets is numbered into the 9000s.
-                    address=f"{rng.randint(100, 3900)} {rng.choice(_STREETS[zip_code])}",
-                    city=city,
-                    state=state,
-                    zip_code=zip_code,
+                    address=f"{rng.randint(100, 3900)} {rng.choice(market.streets)}",
+                    city=market.city,
+                    state=market.state,
+                    zip_code=market.zip_code,
                     price=price,
                     beds=beds,
                     baths=baths,
@@ -164,20 +228,33 @@ def _build_dataset() -> list[Listing]:
                     # Per-market box (see _MARKETS), sized so a realistic
                     # 1-1.5 mile comp radius returns intra-ZIP neighbours
                     # without scattering listings outside the ZIP's real extent.
-                    latitude=round(lat + rng.uniform(-d_lat, d_lat), 6),
-                    longitude=round(lon + rng.uniform(-d_lon, d_lon), 6),
+                    latitude=round(
+                        market.latitude
+                        + rng.uniform(-market.jitter_lat, market.jitter_lat),
+                        6,
+                    ),
+                    longitude=round(
+                        market.longitude
+                        + rng.uniform(-market.jitter_lon, market.jitter_lon),
+                        6,
+                    ),
                     sold_price=sold_price,
                     sold_date=sold_date.isoformat() if sold_date else None,
-                    # No zero here, unlike the mainland dataset: a Hawaii condo
-                    # or townhouse without an association fee does not exist,
-                    # and the maintenance fee is large enough relative to price
-                    # that a buyer's affordability answer is wrong without it.
-                    hoa_monthly=rng.choice([165, 285, 480, 720, 1150])
+                    # Derived from size and market, not drawn from a flat menu.
+                    # A Hawaii condo or townhouse without an association fee does
+                    # not exist, and at these magnitudes the fee drives the
+                    # affordability answer rather than decorating it -- so an
+                    # uncorrelated draw is not merely imprecise, it is backwards:
+                    # it put $165/mo on a $1.3M Waikiki condo and $1,150/mo on a
+                    # $380k Hilo one. One `rng` call either way.
+                    hoa_monthly=int(
+                        round(sqft * market.hoa_psf * rng.uniform(0.85, 1.2), -1)
+                    )
                     if property_type != "single_family"
                     else 0,
                     description=(
                         f"{beds} bed / {baths} bath {property_type.replace('_', ' ')} "
-                        f"in {city}, built {year_built}."
+                        f"in {market.city}, built {year_built}."
                     ),
                 )
             )

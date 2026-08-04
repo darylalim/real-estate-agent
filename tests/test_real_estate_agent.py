@@ -113,7 +113,7 @@ def test_every_advertised_filter_value_exists_in_the_dataset(
     # property_type leg would otherwise assert something narrower than its name
     # and could fail for a reason that is not the advertised defect. Note this
     # checks each value exists *somewhere*; a three-way combination such as
-    # city + status + property_type can still be empty in a 66-listing fixture,
+    # city + status + property_type can still be empty in a fixture this size,
     # and no reasonable dataset size fixes that.
     search = cast(Any, provider.search)
     for value in _advertised_enum(tool, field):
@@ -171,7 +171,7 @@ def test_most_listings_have_a_usable_comp_set(provider: MockListingsProvider) ->
     """A fixture where no CMA is ever possible cannot exercise the analyst.
 
     Regression: the size screen initially rejected everything because square
-    footage was spread too widely across a 66-listing dataset.
+    footage was spread too widely across the dataset.
     """
     active = provider.search(status="active", limit=500)
     with_min_comps = sum(
@@ -321,23 +321,34 @@ def test_lot_size_is_never_negative(provider: MockListingsProvider) -> None:
 def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall(
     provider: MockListingsProvider,
 ) -> None:
-    """Regression: a $2M budget in a sub-$800k market was reported as clearing 8%."""
+    """Regression: a $2M budget in a market it clears outright was reported as 8%.
+
+    Honolulu with a 4-bed floor, rather than Hilo with a 5-bed one: the tool
+    raises the narrowing signal at `meets_requirements / total_active < 0.25`,
+    and Hilo sits on exactly 0.250, so that pairing tested the boundary rather
+    than the behaviour. This one is 3 of 13.
+    """
     tools = {tool.name: tool for tool in make_comms_tools(provider)}
     payload = json.loads(
         tools["qualify_lead"].invoke(
             {
                 "name": "Jane",
-                "target_city": "Hilo",
+                "target_city": "Honolulu",
                 "budget_max": 2_000_000,
                 "timeline_months": 2,
                 "pre_approved": True,
-                "min_beds": 5,
+                "min_beds": 4,
             }
         )
     )
     feasibility = payload["market_feasibility"]
     # Budget clears everything that meets the requirements; beds are binding.
-    assert feasibility["share_of_qualifying_inventory_affordable"] == 1.0
+    assert feasibility["share_of_qualifying_inventory_within_list_price"] == 1.0
+    # The key says what it measures. It was "..._affordable" while measuring list
+    # price alone, which is prompt surface making a claim the number cannot back.
+    # Keys only — the payload's own guidance text uses the word deliberately,
+    # telling the model to check `hoa_monthly` before calling anything affordable.
+    assert not any("affordable" in key for key in feasibility)
     assert not any(
         "Budget clears only" in signal for signal in payload["qualification"]["signals"]
     )

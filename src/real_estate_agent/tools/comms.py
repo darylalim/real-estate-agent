@@ -61,9 +61,16 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
         """Score an inbound lead and test their budget against real inventory.
 
         Combines a readiness tier (financing plus timeline) with a feasibility
-        check: how much of the current market actually matches what they can
-        afford. A pre-approved buyer with a budget below every listing in their
-        target city is not a strong lead, and this surfaces that.
+        check: how much of the current market falls within their stated maximum
+        LIST PRICE. A pre-approved buyer whose budget is below every listing in
+        their target city is not a strong lead, and this surfaces that.
+
+        The feasibility share is a list-price screen and nothing more. It does
+        not account for `hoa_monthly`, which on a condo or townhouse can be a
+        large share of the monthly payment and can reverse the ranking — the
+        cheapest listing by sticker is routinely not the cheapest to own. Each
+        entry in `sample_matches` carries its own `hoa_monthly`; use it before
+        telling a client what they can afford.
 
         Args:
             name: Lead's name.
@@ -172,10 +179,16 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
                     "active_listings_in_city": len(total_active),
                     "listings_meeting_requirements": len(meets_requirements),
                     "listings_within_budget_and_requirements": len(matches),
-                    "share_of_qualifying_inventory_affordable": round(share, 3),
+                    "share_of_qualifying_inventory_within_list_price": round(share, 3),
                     "denominator": (
                         "listings_meeting_requirements — so this share reflects "
                         "budget alone, not the bedroom or location filters"
+                    ),
+                    "excludes": (
+                        "list price only; hoa_monthly is not included, and on a "
+                        "condo or townhouse it can reverse which listing is "
+                        "cheapest to own — check it on each match before "
+                        "describing anything as affordable"
                     ),
                     "sample_matches": [listing.as_dict() for listing in matches[:5]],
                 },

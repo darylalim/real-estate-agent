@@ -54,9 +54,15 @@ showings costs the relationship.
 ### Shortlist delivery
 
 Open with how many properties and the criteria used. Table: address, price,
-beds/baths, sqft, $/sqft, days-on-market. One line per property on why it made
-the list. Name the trade-offs — every shortlist has them. Close with which to
-tour first and why.
+HOA/mo, beds/baths, sqft, $/sqft, days-on-market. One line per property on why
+it made the list. Name the trade-offs — every shortlist has them. Close with
+which to tour first and why.
+
+The HOA column is not optional padding. Where fees are high, the cheapest
+listing by sticker price is routinely not the cheapest to own, so a table
+without it ranks properties on a cost basis the client does not actually face —
+and "which to tour first" then follows from the wrong number. If a property
+carries no association fee, write "—" rather than dropping the column.
 
 ### CMA presentation
 
