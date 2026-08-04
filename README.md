@@ -1,4 +1,4 @@
-# real-estate-agent
+# Real Estate Agent
 
 [![check](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml/badge.svg)](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml)
 
