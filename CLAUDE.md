@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 72 tests, ~1.3s, no API calls
+uv run pytest tests/ -q                          # full suite: 73 tests, ~1.3s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -85,14 +85,26 @@ would be checked only by ty's syntax-level view, never at runtime. `--isolated` 
 so your 3.14 venv is untouched; it costs one resolve, then ~3s. If it ever fails, the honest fix is usually to
 narrow `requires-python`, not to delete the leg.
 
-The whole suite runs offline. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy
-key to assert on wiring only, so there is no reason to skip tests for cost or network.
+The whole suite runs offline **because `tests/conftest.py` makes it so** — it was not, and the claim on this
+line was false for the repo's first 31 commits. `test_agent_exposes_planning_and_delegation` builds the real
+graph under a dummy key to assert on wiring only, so no test reaches Anthropic; but `config.py` calls
+`load_dotenv()` at import, `.env` carries `LANGSMITH_TRACING=true`, and every `tool.invoke()` in the suite was
+therefore a LangSmith **root** run — 17 of them per run, over a network, billed against a free tier. Read the
+conftest before touching any of that; the ordering it depends on is easy to undo. There is no reason to skip
+tests for cost or network *now*, which is a different statement from the one that used to be here.
 
-The last six tests are of a different kind: they check the *toolchain config*, not the agent, and fail when
-the config and the docs disagree. Four read the live `pyproject.toml` and the pins written in this file and
-`README.md` — the ruff pin, `extend-select`, and `error-on-warning` are otherwise all silently droppable.
-`test_check_script_pins_match_the_docs` extends that to `scripts/check.sh`, which is the thing that actually
-runs them. Each was verified to fail on the drift it describes, not merely to pass today.
+The cluster at the end of the file is of a different kind: those tests check the *toolchain config*, not the
+agent, and fail when the config and the docs disagree. Four read the live `pyproject.toml` and the pins written
+in this file and `README.md` — the ruff pin, `extend-select`, and `error-on-warning` are otherwise all silently
+droppable. `test_check_script_pins_match_the_docs` extends that to `scripts/check.sh`, which is the thing that
+actually runs them. Each was verified to fail on the drift it describes, not merely to pass today.
+(No count here on purpose: the two counts this file used to write out both went stale the first time the list
+grew, and a positional "the last six" is the same trap wearing a different hat.)
+
+`test_the_suite_does_not_trace_to_langsmith` sits in that cluster but reads neither config nor docs — it asks
+`langsmith.utils.tracing_is_enabled()` about the live environment. Asserting on the effective state rather than
+on `tests/conftest.py` existing is deliberate: deleting that file, renaming a variable inside it, or adding
+`override=True` to `config.py`'s `load_dotenv()` all defeat the fix, and only the environment sees all three.
 
 `test_documented_test_count_matches_the_suite` is the odd one out: it reads no config at all, and it counts
 itself via `request.session.testscollected`, because adding a test is precisely when the number written above
@@ -120,7 +132,9 @@ running it somewhere is most of the reason to have a second machine.
 
 No secrets, by construction. The suite is offline and the one test that builds the real graph injects its own
 dummy `ANTHROPIC_API_KEY`, so `permissions: contents: read` is enough — don't add a key to make some future
-live test possible without re-reading that decision. Actions are pinned by commit sha with the tag in a
+live test possible without re-reading that decision. A side effect worth knowing: because a clean checkout has
+no `.env`, CI never emitted a LangSmith trace even while every local run was emitting 17. The whole spend was
+on this laptop, via the Stop hook, which is also why nothing in the workflow logs pointed at it. Actions are pinned by commit sha with the tag in a
 trailing comment; bump both halves together.
 
 ## The hooks in `.claude/`
@@ -315,6 +329,16 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   pins `TodoListMiddleware()` explicitly.
 - **Models need the LangChain `provider:model` prefix.** A bare `claude-opus-5` will not resolve.
   `require_api_key()` derives which key to demand from that prefix.
+- **`tests/conftest.py` must disable LangSmith tracing, and it only works from there.** `config.py` calls
+  `load_dotenv()` at import, so importing the package is enough to pull `LANGSMITH_TRACING=true` out of a real
+  `.env`. Every `tool.invoke()` in the suite then becomes a **root** run, and LangSmith bills per trace rather
+  than per span — so 17 one-span traces per run cost what 17 whole agent conversations would, while a live
+  turn nests all its subagent and tool spans inside a single trace for free. `done-gate.sh` runs the suite
+  every turn and the floor leg runs it twice, which is how a free tier goes in a few hundred turns. Two things
+  hold it up and both are easy to undo: pytest imports `conftest.py` before any test module, so it beats the
+  first `import real_estate_agent.config`; and `load_dotenv()` defaults to `override=False`, so an
+  already-set variable wins — passing `override=True` there re-enables tracing everywhere at once.
+  `test_the_suite_does_not_trace_to_langsmith` asserts the effective state, not the file.
 - **The mock's "now" is a frozen `_TODAY = date(2026, 7, 31)`**, not `date.today()`. Generation and every
   recency filter read it, so they cannot drift and silently disable the close-date screen. Changing it, or the
   square-footage sigma, shifts comp availability — `test_most_listings_have_a_usable_comp_set` asserts ≥60% of

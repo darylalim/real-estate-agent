@@ -57,7 +57,7 @@ the conversation. Tool-result panels and the file preview render their contents
 only when opened — a collapsed `st.expander` still ships its body otherwise, so
 a long thread was re-sending every tool call's JSON on every turn.
 
-Checks — all three must pass. No API calls, no key required:
+Checks — all three must pass. No API calls, no key required, and no network:
 
 ```bash
 scripts/check.sh              # runs all three with the pinned versions
@@ -66,7 +66,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 72 tests, ~1.3s
+uv run pytest tests/ -q       # 73 tests, ~1.3s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -87,6 +87,15 @@ CI (`.github/workflows/check.yml`) runs `scripts/check.sh --floor` on Linux for 
 `uv sync --locked` so a stale `uv.lock` fails the build. It calls the script rather than restating the tools,
 which is the point of having the script: one place decides what "done" means. No secrets — the suite is
 entirely offline.
+
+That last claim is now enforced rather than asserted. It used to be false: `config.py` calls `load_dotenv()` at
+import, `.env.example` documents `LANGSMITH_TRACING=true`, and so a developer with a real `.env` had every
+`tool.invoke()` in the suite reporting to LangSmith as its own root run — 17 per run, against a Stop hook that
+runs the suite on every turn. LangSmith bills per trace, so those one-span traces cost the same as full agent
+conversations, and the tests quietly outspent the runs actually worth tracing. `tests/conftest.py` turns
+tracing off before the package is imported, and `test_the_suite_does_not_trace_to_langsmith` fails if anything
+turns it back on. Live runs via `main.py` and Streamlit are untouched and still trace normally. CI never had
+the problem — a clean checkout has no `.env` — which is exactly why nothing in the build logs revealed it.
 
 ## Architecture
 

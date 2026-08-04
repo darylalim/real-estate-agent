@@ -21,6 +21,7 @@ import pytest
 from deepagents import FilesystemPermission
 from deepagents.middleware.filesystem import _check_fs_permission
 from langchain_core.tools import BaseTool
+from langsmith.utils import tracing_is_enabled
 
 from real_estate_agent.config import PROJECT_ROOT
 from real_estate_agent.providers import MockListingsProvider
@@ -1465,6 +1466,33 @@ def test_ty_fails_the_build_on_warnings() -> None:
     """Adopted at zero warnings — the only cheap moment. Dropping it lets them
     accumulate with nothing reporting that the gate got weaker."""
     assert _pyproject()["tool"]["ty"]["terminal"]["error-on-warning"] is True
+
+
+def test_the_suite_does_not_trace_to_langsmith() -> None:
+    """Tracing on during the suite spends a LangSmith quota and nothing reports it.
+
+    `config.py` calls `load_dotenv()` at import, so importing the package pulls a
+    developer's real `.env` — which `.env.example` documents as carrying
+    `LANGSMITH_TRACING=true` — into the environment. Every `tool.invoke()` in
+    this file is then a **root** run, and LangSmith bills per trace rather than
+    per span, so 17 one-span traces per run cost what 17 whole agent
+    conversations would. The Stop hook runs this suite every turn.
+
+    This is the silent-failure shape the invariants section exists for: the
+    suite stays green, `pytest -q` still prints no errors, and the only symptom
+    is an exhausted free tier weeks later.
+
+    Asserts the *effective* state via langsmith's own predicate rather than
+    checking that `tests/conftest.py` exists, so deleting that file, renaming a
+    variable in it, or a `load_dotenv(override=True)` in `config.py` each fail
+    here. `tracing_is_enabled` reads `LANGSMITH_*` before `LANGCHAIN_*` and
+    `TRACING_V2` before `TRACING`, which is why conftest sets all four.
+    """
+    assert not tracing_is_enabled(), (
+        "LangSmith tracing is enabled during the test suite -- every tool.invoke() "
+        "here is a billable root run. tests/conftest.py must disable it before "
+        "real_estate_agent.config calls load_dotenv()."
+    )
 
 
 # Every option that collects a subset. A subset says nothing about the whole
