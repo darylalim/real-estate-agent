@@ -12,6 +12,7 @@ import ast
 import email
 import email.policy
 import json
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -1482,12 +1483,32 @@ def test_the_suite_does_not_trace_to_langsmith() -> None:
     suite stays green, `pytest -q` still prints no errors, and the only symptom
     is an exhausted free tier weeks later.
 
-    Asserts the *effective* state via langsmith's own predicate rather than
-    checking that `tests/conftest.py` exists, so deleting that file, renaming a
-    variable in it, or a `load_dotenv(override=True)` in `config.py` each fail
-    here. `tracing_is_enabled` reads `LANGSMITH_*` before `LANGCHAIN_*` and
-    `TRACING_V2` before `TRACING`, which is why conftest sets all four.
+    The first assertion is the load-bearing one, and asserting `tracing_is_enabled()`
+    alone was **not enough** — that was this test's first version and it was
+    vacuous everywhere it mattered. The predicate only reads the environment, so
+    on a checkout with no `.env` — CI, or any contributor who never copied
+    `.env.example` — nothing sets the variable, tracing is already off, and the
+    test passes whether or not `tests/conftest.py` still exists. Measured against
+    a `git archive` of this commit: deleting the conftest left the run green.
+    A guard that only fires on the one machine that already has the problem is
+    not a guard.
+
+    Asserting the *value* conftest writes fixes that in both directions. Absent
+    the conftest the name is unset (`None`) on a clean checkout and `"true"` on a
+    developer's, and neither equals `"false"`; with `load_dotenv(override=True)`
+    in `config.py` it is `"true"`. `tracing_is_enabled()` stays as the second
+    assertion because it is what LangChain actually consults, so it still catches
+    a langsmith release that reads some name conftest does not set.
+
+    Deletion is the only case this test owns alone. `pytest_collection_finish` in
+    the conftest covers the rest earlier — before the first `invoke` rather than
+    after the last, and on filtered runs that never collect this test.
     """
+    assert os.environ.get("LANGSMITH_TRACING") == "false", (
+        "tests/conftest.py did not run, or no longer sets LANGSMITH_TRACING. Every "
+        "tool.invoke() in this suite is a billable LangSmith root run without it, "
+        "and on a checkout with no .env nothing else here would notice."
+    )
     assert not tracing_is_enabled(), (
         "LangSmith tracing is enabled during the test suite -- every tool.invoke() "
         "here is a billable root run. tests/conftest.py must disable it before "

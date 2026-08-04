@@ -101,10 +101,25 @@ actually runs them. Each was verified to fail on the drift it describes, not mer
 (No count here on purpose: the two counts this file used to write out both went stale the first time the list
 grew, and a positional "the last six" is the same trap wearing a different hat.)
 
-`test_the_suite_does_not_trace_to_langsmith` sits in that cluster but reads neither config nor docs — it asks
-`langsmith.utils.tracing_is_enabled()` about the live environment. Asserting on the effective state rather than
-on `tests/conftest.py` existing is deliberate: deleting that file, renaming a variable inside it, or adding
-`override=True` to `config.py`'s `load_dotenv()` all defeat the fix, and only the environment sees all three.
+`test_the_suite_does_not_trace_to_langsmith` sits in that cluster but reads neither config nor docs — it reads
+the live environment. **Its first version asserted only `langsmith.utils.tracing_is_enabled()`, and that was
+vacuous exactly where it mattered.** The predicate reads the environment and nothing else, so on a checkout
+with no `.env` — CI, or anyone who never copied `.env.example` — tracing is already off and the test passes
+with `tests/conftest.py` deleted. Measured against a `git archive` of the commit: the fix removed, the suite
+green. It fired only on a machine that already had the problem, which is the one place a guard buys nothing.
+It now asserts the *value* the conftest writes: `None` on a clean checkout, `"true"` under
+`load_dotenv(override=True)`, neither of which is `"false"`. `tracing_is_enabled()` stays as a second
+assertion, since it is what LangChain actually consults.
+
+The general form is worth keeping: **a guard that reads a default-off condition proves nothing on a machine
+where the condition is off by default.** Assert the thing your fix *writes*, not the state it happens to
+produce on the box you are typing on.
+
+Deletion is the only case that test owns alone. `pytest_collection_finish` in the conftest catches the rest
+sooner — the test runs in definition order, after all 17 traced `invoke`s, so on the run that detects a
+regression the spend has already happened, and a `-k`-filtered run never reaches it at all. The hook fires
+after collection has imported `config.py` and before any test executes. It cannot catch its own file being
+deleted, which is why both exist.
 
 `test_documented_test_count_matches_the_suite` is the odd one out: it reads no config at all, and it counts
 itself via `request.session.testscollected`, because adding a test is precisely when the number written above
@@ -134,7 +149,8 @@ No secrets, by construction. The suite is offline and the one test that builds t
 dummy `ANTHROPIC_API_KEY`, so `permissions: contents: read` is enough — don't add a key to make some future
 live test possible without re-reading that decision. A side effect worth knowing: because a clean checkout has
 no `.env`, CI never emitted a LangSmith trace even while every local run was emitting 17. The whole spend was
-on this laptop, via the Stop hook, which is also why nothing in the workflow logs pointed at it. Actions are pinned by commit sha with the tag in a
+on this laptop, via the Stop hook, which is also why nothing in the workflow logs pointed at it — and why the
+first guard against it passed here while proving nothing. Actions are pinned by commit sha with the tag in a
 trailing comment; bump both halves together.
 
 ## The hooks in `.claude/`
@@ -338,7 +354,15 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   hold it up and both are easy to undo: pytest imports `conftest.py` before any test module, so it beats the
   first `import real_estate_agent.config`; and `load_dotenv()` defaults to `override=False`, so an
   already-set variable wins — passing `override=True` there re-enables tracing everywhere at once.
-  `test_the_suite_does_not_trace_to_langsmith` asserts the effective state, not the file.
+  `os.environ.setdefault` is the tempting simplification and it is **backwards**: `.env` has not been read at
+  conftest time, so setdefault leaves the name unset and the later `load_dotenv()` sets it to `true`, which is
+  the original defect exactly. Assign unconditionally, and use `REA_TEST_TRACING=1` for the one legitimate
+  case — tracing a single test on purpose — rather than reaching for setdefault to make an exported
+  `LANGSMITH_TRACING=true` survive. Guarded from two sides, deliberately:
+  `test_the_suite_does_not_trace_to_langsmith` asserts the *value* conftest writes (the only check that
+  survives the file being deleted, since a clean checkout has no `.env` and passes any is-tracing-off test),
+  and `pytest_collection_finish` in the conftest aborts before the first `invoke` rather than after the last,
+  which is also the only one that covers `-k`-filtered runs.
 - **The mock's "now" is a frozen `_TODAY = date(2026, 7, 31)`**, not `date.today()`. Generation and every
   recency filter read it, so they cannot drift and silently disable the close-date screen. Changing it, or the
   square-footage sigma, shifts comp availability — `test_most_listings_have_a_usable_comp_set` asserts ≥60% of

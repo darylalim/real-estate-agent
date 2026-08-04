@@ -57,7 +57,7 @@ the conversation. Tool-result panels and the file preview render their contents
 only when opened — a collapsed `st.expander` still ships its body otherwise, so
 a long thread was re-sending every tool call's JSON on every turn.
 
-Checks — all three must pass. No API calls, no key required, and no network:
+Checks — all three must pass. No API calls, no key required:
 
 ```bash
 scripts/check.sh              # runs all three with the pinned versions
@@ -93,9 +93,17 @@ import, `.env.example` documents `LANGSMITH_TRACING=true`, and so a developer wi
 `tool.invoke()` in the suite reporting to LangSmith as its own root run — 17 per run, against a Stop hook that
 runs the suite on every turn. LangSmith bills per trace, so those one-span traces cost the same as full agent
 conversations, and the tests quietly outspent the runs actually worth tracing. `tests/conftest.py` turns
-tracing off before the package is imported, and `test_the_suite_does_not_trace_to_langsmith` fails if anything
-turns it back on. Live runs via `main.py` and Streamlit are untouched and still trace normally. CI never had
-the problem — a clean checkout has no `.env` — which is exactly why nothing in the build logs revealed it.
+tracing off before the package is imported. Live runs via `main.py` and Streamlit are untouched and still
+trace normally. CI never had the problem — a clean checkout has no `.env` — which is exactly why nothing in
+the build logs revealed it.
+
+That last point is also what made the first guard useless, and it is worth knowing before trusting this one.
+`test_the_suite_does_not_trace_to_langsmith` originally asserted only that tracing was off, which is true by
+default anywhere there is no `.env` — so on CI it passed with the fix **deleted**, and the check fired only on
+the one machine that already had the problem. It now asserts the value the conftest writes, which is absent on
+a clean checkout and wrong on a configured one, so both fail; and a `pytest_collection_finish` hook aborts the
+session before the first tool call rather than reporting after the last, which also covers `-k`-filtered runs
+that never collect the test.
 
 ## Architecture
 

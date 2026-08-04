@@ -73,5 +73,6 @@ error-on-warning = true
 
 [dependency-groups]
 dev = [
+    "langsmith>=0.10.15",
     "pytest>=9.1.1",
 ]
