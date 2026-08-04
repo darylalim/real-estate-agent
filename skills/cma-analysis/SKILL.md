@@ -75,7 +75,9 @@ matter most, and a CMA built from what survives looks defensible and is not.
 
 Do **not** average the adjusted values. Weight them: the comps that needed the
 smallest gross adjustment are the most reliable, and they should drive the
-number.
+number. Use the same gross total the 25% screen uses — HOA excluded — or a
+same-building comp gets kept by the screen and then down-weighted for the very
+adjustment the screen just forgave.
 
 Produce a **range**, then state where in that range you land and why. A single
 unqualified figure implies a precision the method does not have.
@@ -94,7 +96,7 @@ Write to `/workspace/cma-<listing-id>.md`:
 # CMA — <address>
 
 ## Subject Property
-<beds/baths, sqft, year built, current list price if any, $/sqft>
+<beds/baths, sqft, year built, current list price if any, $/sqft, HOA/mo>
 
 ## Comparable Sales
 | Address | Sold | Price | $/sqft | Sqft | Beds | HOA/mo | Net adj. | Adjusted |

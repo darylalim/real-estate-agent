@@ -88,6 +88,7 @@ class ListingsProvider(Protocol):
         months_back: int = 6,
         limit: int = 8,
         max_sqft_delta_pct: float | None = 0.30,
+        same_property_type: bool = True,
     ) -> Sequence[Listing]:
         """Return recently sold properties suitable as comps for ``listing_id``.
 
@@ -95,6 +96,11 @@ class ListingsProvider(Protocol):
         from the subject by more than this fraction. The CMA methodology
         discards such comps anyway, so returning them only wastes the analyst's
         tokens. Pass ``None`` to disable the screen.
+
+        ``same_property_type`` restricts comps to the subject's own type, which
+        the CMA methodology also requires. Pass ``False`` to widen deliberately
+        when a type is thin in its market — a decision the analyst should state,
+        not one the provider should make silently.
         """
         ...
 
@@ -116,6 +122,7 @@ class DiagnosticListingsProvider(ListingsProvider, Protocol):
         months_back: int = 6,
         limit: int = 8,
         max_sqft_delta_pct: float | None = 0.30,
+        same_property_type: bool = True,
     ) -> tuple[Listing | None, list[Listing], dict[str, int]]:
         """Return ``(subject, comps, rejection_counts_by_reason)``."""
         ...

@@ -27,6 +27,13 @@ _WHITESPACE_RUN = re.compile(r"\s+")
 # Outlook truncates mailto: around 2 KB; stay clear of the edge.
 _MAILTO_MAX_CHARS = 1800
 
+# Purchase-price equivalent of $1/month of association fee. The same basis the
+# cma-analysis skill states for its HOA adjustment row, deliberately: the
+# analyst valuing a fee delta in a CMA and the liaison testing a budget against
+# one are answering the same question, and two bases would let the same fee be
+# worth two different amounts on one screen.
+_HOA_CAPITALISATION = 100
+
 
 def _collapse_whitespace(value: str) -> str:
     """Flatten a value destined for an email header to a single line."""
@@ -65,12 +72,12 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
         LIST PRICE. A pre-approved buyer whose budget is below every listing in
         their target city is not a strong lead, and this surfaces that.
 
-        The feasibility share is a list-price screen and nothing more. It does
-        not account for `hoa_monthly`, which on a condo or townhouse can be a
-        large share of the monthly payment and can reverse the ranking — the
-        cheapest listing by sticker is routinely not the cheapest to own. Each
-        entry in `sample_matches` carries its own `hoa_monthly`; use it before
-        telling a client what they can afford.
+        Two feasibility counts come back, not one. The list-price screen answers
+        "can they bid on it"; the fee-inclusive screen answers "can they carry
+        it", capitalising `hoa_monthly` at the same basis the CMA methodology
+        uses. Where fees are high the two diverge sharply and the cheapest
+        listing by sticker is routinely not the cheapest to own — report the
+        gap rather than either number alone.
 
         Args:
             name: Lead's name.
@@ -104,6 +111,17 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
                 limit=500,
             )
         )
+        # Computed here rather than described to the model, which is the repo's
+        # standing rule: a share the model re-derives per turn from a paragraph
+        # of prose is a share that can differ between two runs of the same
+        # question. `_HOA_CAPITALISATION` matches the CMA skill's adjustment
+        # basis, so the two halves of the app value a fee the same way.
+        carryable = [
+            listing
+            for listing in matches
+            if listing.price + (listing.hoa_monthly or 0) * _HOA_CAPITALISATION
+            <= budget_max
+        ]
         total_active = list(
             provider.search(city=target_city, state=state, status="active", limit=500)
         )
@@ -184,11 +202,20 @@ def make_comms_tools(provider: ListingsProvider) -> list[BaseTool]:
                         "listings_meeting_requirements — so this share reflects "
                         "budget alone, not the bedroom or location filters"
                     ),
-                    "excludes": (
-                        "list price only; hoa_monthly is not included, and on a "
-                        "condo or townhouse it can reverse which listing is "
-                        "cheapest to own — check it on each match before "
-                        "describing anything as affordable"
+                    "listings_within_budget_including_fees": len(carryable),
+                    "share_of_qualifying_inventory_carryable": round(
+                        (len(carryable) / len(meets_requirements))
+                        if meets_requirements
+                        else 0.0,
+                        3,
+                    ),
+                    "fee_basis": (
+                        f"list price + {_HOA_CAPITALISATION}× hoa_monthly, the "
+                        "same capitalisation the CMA adjustment grid uses. The "
+                        "gap between this count and "
+                        "listings_within_budget_and_requirements is how much of "
+                        "their apparent affordability the association fees take "
+                        "back — lead with it when the two differ"
                     ),
                     "sample_matches": [listing.as_dict() for listing in matches[:5]],
                 },

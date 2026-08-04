@@ -89,7 +89,7 @@ def make_listing_tools(provider: ListingsProvider) -> list[BaseTool]:
         """Fetch the full record for one listing by its MLS id, as JSON.
 
         Args:
-            listing_id: The listing identifier, e.g. "MLS-1022".
+            listing_id: The listing identifier, e.g. "MLS-1016".
         """
         listing = provider.get(listing_id)
         if listing is None:

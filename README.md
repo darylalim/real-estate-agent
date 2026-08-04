@@ -66,7 +66,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 71 tests, ~0.9s
+uv run pytest tests/ -q       # 72 tests, ~1.3s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -136,8 +136,8 @@ agent = build_agent(provider=MyMlsProvider(api_key=...))
 ```
 
 The mock models two deliberately different Hawaii markets (Honolulu 96815/96816
-at $566k–$1.28M active, median $915k and $768/sqft; Hilo 96720 at $257k–$642k,
-median $455k and $329/sqft) so budget-feasibility logic has something real to
+at $566k–$1.69M active, median $1.04M and $761/sqft; Hilo 96720 at $257k–$642k,
+median $521k and $312/sqft) so budget-feasibility logic has something real to
 bite on. The two Honolulu ZIPs sit ~2.1 miles apart, so the default 1.5-mile
 comp radius mostly separates them — mostly, because the per-ZIP coordinate
 jitter lets a small tail of cross-ZIP pairs fall inside it. Hilo is on another
@@ -149,25 +149,38 @@ single global value was wrong for at least one of the three:
 - **Property mix.** 96815 is Waikiki — a wall of condo towers with essentially
   no detached housing — while 96720 is overwhelmingly single-family. A uniform
   draw put 2,100-sqft single-family homes on Seaside Ave.
-- **Coordinate jitter.** Waikiki is a ~0.35-mile strip between the Ala Wai Canal
-  and the shoreline, and a box sized for a sprawling mainland ZIP put six of its
-  listings in the Pacific, which the market page's `st.map` rendered faithfully.
 - **Association fee.** Derived from size and market rather than drawn from a
   flat menu. Uncorrelated, it put $165/mo on a $1.3M Waikiki condo and $1,150/mo
   on a $380k Hilo one — and at Hawaii's fee levels that drives the affordability
-  answer rather than decorating it.
+  answer rather than decorating it. It is capitalised at 100× the monthly figure
+  wherever a fee has to be compared against a price, in both the CMA adjustment
+  grid and `qualify_lead`, so one fee cannot be worth two amounts on one screen.
 
-Addresses carry their real street type (`Kalakaua Ave`, `Beach Walk`,
-`Wilhelmina Rise`) rather than a suffix drawn at random, and street names are
-scoped to their ZIP.
+Addresses are anchored on the street, not the ZIP. Each street carries its own
+coordinates and its real house-number range, so `238 Beach Walk` lands on Beach
+Walk and cannot be numbered into the 3000s on a two-block street. That replaced
+a per-ZIP coordinate box, which could not work here for a reason worth keeping:
+Waikiki is a narrow strip along a **diagonal** shoreline, so every axis-aligned
+rectangle covering it also covers open water. Shrinking the box cut the number
+of listings in the Pacific from six to none by the flat-latitude test that was
+used to check it, and left eleven there when measured against the real coast —
+the shape was the defect, and a test whose boundary is chosen to match the fix
+can only confirm it.
 
-The dataset is deliberately sold-heavy — ~68% closed, ~22% active — because
+The dataset is deliberately sold-heavy — 76 closed against 22 active — because
 months-of-inventory divides standing inventory by the monthly rate of a *year*
 of sales, so a market at four months needs roughly three times as many closed
-records as active ones. The payoff is that the two markets now land on opposite
-sides of the interpretation threshold: Honolulu reads 2.8 months (seller's) and
-Hilo 6.5 (buyer's), where the previous fixture reported a deep buyer's market
-for both and never exercised the other branch.
+records as active ones. The payoff is that the two markets now read differently:
+Honolulu lands at 2.8 months (seller's) and Hilo at 5.0 (balanced), where the
+previous fixture reported a deep buyer's market for both and never exercised
+the other branches at all.
+
+Comps are screened on property type as well as size, and `screened_out` reports
+both. Without it the scorer — which weighs distance, size, beds and age, but
+never type — handed a Waikiki townhouse eight single-family comps while the CMA
+methodology told the analyst to require the same type, with nothing in the
+payload explaining the contradiction. Pass `same_property_type=False` to widen
+deliberately; that is a weaker comparison, not a neutral one.
 
 ## Skills vs. prompts
 
@@ -216,6 +229,13 @@ it to recommend an attorney, appraiser, or lender rather than substitute for one
 | `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
 
 ## Verified behaviour
+
+Both tables below were run against the **previous** Austin/Round Rock fixture,
+and the listing ids and statuses in them are from that dataset — `MLS-1022` was
+a pending Austin townhouse and is now a sold Waikiki condo. The behaviours each
+row checks are unchanged and still hold; the specific evidence is not
+reproducible without regenerating that dataset. Re-run rather than re-read if
+you need the ids.
 
 ### The CLI
 
@@ -291,7 +311,7 @@ Three defects the CLI run above exposed, since fixed:
   thin market.
 - The mock spread square footage too widely for the dataset size, so small
   properties had no size-matched comps and no CMA was possible. Sizes now
-  cluster; 21 of 25 active listings clear the 3-comp minimum, and the other 4
+  cluster; 17 of 22 active listings clear the 3-comp minimum, and the other 5
   remain genuine outliers so the insufficient-comps path stays reachable.
 - client-liaison had two ways to write a draft and used both, producing
   divergent copies. `save_draft` is now the only sanctioned path.

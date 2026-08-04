@@ -63,6 +63,7 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
         months_back: int = 6,
         limit: int = 8,
         max_sqft_delta_pct: float = 0.30,
+        same_property_type: bool = True,
     ) -> str:
         """Find recently sold comparables for a subject property, as JSON.
 
@@ -72,22 +73,30 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
         primary input to a CMA.
 
         Candidates whose living area differs from the subject by more than
-        `max_sqft_delta_pct` are excluded before ranking, because the CMA
-        methodology discards them anyway. If `screened_out.size_mismatch` is
-        high and `comps_found` is low, the subject is an outlier for its market
-        — say so rather than stretching the remaining comps.
+        `max_sqft_delta_pct`, or whose property type differs from the subject's,
+        are excluded before ranking, because the CMA methodology discards them
+        anyway. Read `screened_out` before concluding anything from a thin set:
+        a high `size_mismatch` means the subject is a size outlier for its
+        market, while a high `type_mismatch` means its *type* is thin there —
+        a condo in a street of detached houses. Neither is a thin market, and
+        both call for saying so rather than stretching the remaining comps.
 
         `screened_out` is null when the data source does not report screening
         counts. Null means "not measured", not "nothing was screened" — do not
         read it as evidence the comp set is complete.
 
         Args:
-            listing_id: Subject property id, e.g. "MLS-1022".
+            listing_id: Subject property id, e.g. "MLS-1016".
             radius_miles: Search radius around the subject property.
             months_back: Only include sales closed within this many months.
             limit: Maximum number of comparables to return.
             max_sqft_delta_pct: Size screen as a fraction, e.g. 0.30 for ±30%.
                 Widen deliberately if the comp set is too thin, and report it.
+            same_property_type: Restrict comps to the subject's own property
+                type, as the CMA methodology requires. Set False only when a
+                type is genuinely thin in its market — and then say in your
+                report that you compared across types, because that is a
+                weaker comparison, not a neutral one.
         """
         diagnostics_fn = getattr(provider, "comparables_with_diagnostics", None)
         if diagnostics_fn is not None:
@@ -97,6 +106,7 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                 months_back=months_back,
                 limit=limit,
                 max_sqft_delta_pct=max_sqft_delta_pct,
+                same_property_type=same_property_type,
             )
             comps = list(comps_seq)
         else:
@@ -111,6 +121,7 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                     months_back=months_back,
                     limit=limit,
                     max_sqft_delta_pct=max_sqft_delta_pct,
+                    same_property_type=same_property_type,
                 )
             )
             rejected = None
@@ -137,6 +148,7 @@ def make_market_tools(provider: ListingsProvider) -> list[BaseTool]:
                     "radius_miles": radius_miles,
                     "months_back": months_back,
                     "max_sqft_delta_pct": max_sqft_delta_pct,
+                    "same_property_type": same_property_type,
                     "comps_found": len(comps),
                 },
                 "screened_out": rejected,

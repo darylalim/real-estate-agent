@@ -24,6 +24,8 @@ from langchain_core.tools import BaseTool
 
 from real_estate_agent.config import PROJECT_ROOT
 from real_estate_agent.providers import MockListingsProvider
+from real_estate_agent.providers.base import Listing
+from real_estate_agent.providers.mock import PROPERTY_TYPES, _pool
 from real_estate_agent.tools import comms, documents
 from real_estate_agent.tools.comms import make_comms_tools
 from real_estate_agent.tools.documents import make_document_tools
@@ -123,6 +125,31 @@ def test_every_advertised_filter_value_exists_in_the_dataset(
         )
 
 
+def test_no_listing_carries_an_unadvertised_property_type(
+    provider: MockListingsProvider,
+) -> None:
+    """The reverse of the test above, which only checked the forward direction.
+
+    Each market's mix is built by `_pool(condo=18, townhouse=2)`, so the type
+    names are *keyword arguments*. `_pool(single_famliy=17, ...)` type-checks,
+    lints, and mints seventeen listings under a name `search_listings` never
+    offers — the model could not filter for them, the Streamlit selectbox would
+    show the typo, and the forward test stays green because every advertised
+    value still exists. `_pool` raises on an unknown key; this asserts the same
+    property against the generated data, which is what actually reaches anyone.
+    """
+    tool = {t.name: t for t in make_listing_tools(provider)}["search_listings"]
+    advertised = set(_advertised_enum(tool, "property_type"))
+    assert set(PROPERTY_TYPES) == advertised, (
+        "the mock's canonical type list and the tool's Literal have drifted"
+    )
+    in_data = {listing.property_type for listing in provider.search(status=None, limit=500)}
+    assert in_data <= advertised, f"unadvertised property types in the data: {in_data - advertised}"
+
+    with pytest.raises(ValueError, match="not advertised"):
+        _pool(single_famliy=3)
+
+
 def test_search_respects_filters(provider: MockListingsProvider) -> None:
     results = provider.search(
         city="Hilo", max_price=600_000, min_beds=3, status="active"
@@ -209,7 +236,13 @@ def test_comparables_report_what_was_screened_out(provider: MockListingsProvider
         subject.listing_id, limit=1000
     )
 
-    assert set(rejected) == {"not_sold", "stale", "outside_radius", "size_mismatch"}
+    assert set(rejected) == {
+        "not_sold",
+        "stale",
+        "type_mismatch",
+        "outside_radius",
+        "size_mismatch",
+    }
     assert sum(rejected.values()) > 0
 
     # Every other listing is either returned or lands in exactly one bucket.
@@ -227,10 +260,18 @@ def test_find_comparables_surfaces_screening(provider: MockListingsProvider) -> 
     assert set(payload["screened_out"]) == {
         "not_sold",
         "stale",
+        "type_mismatch",
         "outside_radius",
         "size_mismatch",
     }
     assert payload["search"]["max_sqft_delta_pct"] == 0.30
+    assert payload["search"]["same_property_type"] is True
+    # Every comp the tool hands back is the subject's own type by default. The
+    # scorer never weighed type, so before the screen a townhouse in a
+    # condo-heavy ZIP got a full set of single-family comps and nothing in
+    # `screened_out` said so.
+    subject_type = payload["subject"]["property_type"]
+    assert all(comp["property_type"] == subject_type for comp in payload["comparables"])
 
 
 def test_find_comparables_reports_value_range(provider: MockListingsProvider) -> None:
@@ -318,26 +359,66 @@ def test_lot_size_is_never_negative(provider: MockListingsProvider) -> None:
 # --- lead qualification ---------------------------------------------------
 
 
-def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall(
-    provider: MockListingsProvider,
-) -> None:
+def _listing(listing_id: str, price: int, beds: int, hoa_monthly: int = 0) -> Listing:
+    """A minimal listing; only the fields `qualify_lead` reads vary."""
+    return Listing(
+        listing_id=listing_id, address=f"{listing_id} Test St", city="Testville",
+        state="HI", zip_code="96815", price=price, beds=beds, baths=2.0, sqft=1200,
+        lot_sqft=0, year_built=2000, property_type="condo", status="active",
+        days_on_market=10, latitude=21.0, longitude=-157.0, hoa_monthly=hoa_monthly,
+    )
+
+
+class _FixedInventory:
+    """A hand-built market satisfying the slice of `ListingsProvider` comms uses.
+
+    This test is about `qualify_lead`'s arithmetic, not about the mock fixture,
+    and against the fixture it kept breaking for reasons that were not the
+    behaviour: the signal fires at `meets_requirements / total_active < 0.25`,
+    and a 12-listing market moves that ratio in steps of 0.083, so every
+    regeneration landed some pairing on or across the line. Twice. A market
+    built here states the ratio outright and cannot drift.
+    """
+
+    def __init__(self, listings: list[Listing]) -> None:
+        self._listings = listings
+
+    def search(self, **filters: Any) -> list[Listing]:
+        max_price = filters.get("max_price")
+        min_beds = filters.get("min_beds")
+        return [
+            listing
+            for listing in self._listings
+            if (max_price is None or listing.price <= max_price)
+            and (min_beds is None or listing.beds >= min_beds)
+        ][: filters.get("limit", 25)]
+
+
+def test_qualify_lead_does_not_blame_budget_for_a_bedroom_shortfall() -> None:
     """Regression: a $2M budget in a market it clears outright was reported as 8%.
 
-    Honolulu with a 4-bed floor, rather than Hilo with a 5-bed one: the tool
-    raises the narrowing signal at `meets_requirements / total_active < 0.25`,
-    and Hilo sits on exactly 0.250, so that pairing tested the boundary rather
-    than the behaviour. This one is 3 of 13.
+    One 5-bed among nine 3-beds, every one far inside the budget. So the budget
+    is not the binding constraint by construction — 1 of 10 meets the bedroom
+    requirement and the budget clears all of it — and any report blaming the
+    budget is the defect, not a property of the data.
     """
+    provider = cast(
+        Any,
+        _FixedInventory(
+            [_listing(f"MLS-{i}", 400_000, 3) for i in range(9)]
+            + [_listing("MLS-9", 500_000, 5)]
+        ),
+    )
     tools = {tool.name: tool for tool in make_comms_tools(provider)}
     payload = json.loads(
         tools["qualify_lead"].invoke(
             {
                 "name": "Jane",
-                "target_city": "Honolulu",
+                "target_city": "Testville",
                 "budget_max": 2_000_000,
                 "timeline_months": 2,
                 "pre_approved": True,
-                "min_beds": 4,
+                "min_beds": 5,
             }
         )
     )

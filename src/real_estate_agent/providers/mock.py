@@ -31,13 +31,51 @@ _TODAY = date(2026, 7, 31)
 _PER_MARKET = 36
 
 
+# The property types `search_listings` advertises to the model. `_pool` is
+# validated against this, because a pool is built from keyword names and
+# `_pool(single_famliy=17, ...)` would otherwise type-check, lint, and mint
+# seventeen listings the tool's own Literal can never filter for --
+# `test_every_advertised_filter_value_exists_in_the_dataset` only checks the
+# forward direction, so nothing would have gone red.
+PROPERTY_TYPES = ("single_family", "condo", "townhouse")
+
+
 def _pool(**counts: int) -> tuple[str, ...]:
     """A weighted draw pool: ``_pool(condo=18, townhouse=2)`` is 90% condo.
 
     Drawn from uniformly, so the weights are just repetition. Each market's pool
     is twenty entries, which makes a count read directly as a percentage.
+
+    Raises:
+        ValueError: if a key is not an advertised ``PROPERTY_TYPES`` value.
     """
+    unknown = sorted(set(counts) - set(PROPERTY_TYPES))
+    if unknown:
+        raise ValueError(
+            f"not advertised property types: {unknown}. "
+            f"search_listings only offers {list(PROPERTY_TYPES)}, so listings "
+            "generated under any other name are unreachable by the model."
+        )
     return tuple(name for name, count in counts.items() for _ in range(count))
+
+
+@dataclass(frozen=True)
+class _Street:
+    """A real street, with the coordinates and house numbers it actually has.
+
+    Both were global before, and both were wrong once the names became real
+    ones. The number range gave "3380 Beach Walk" on a two-block street, and a
+    ZIP-wide coordinate box put eleven Waikiki listings in the Pacific -- Waikiki
+    is a narrow strip along a *diagonal* shoreline, so no axis-aligned rectangle
+    covers it without overhanging the water. Anchoring on the street solves both,
+    and is the only version where the address and the map pin agree.
+    """
+
+    name: str
+    latitude: float
+    longitude: float
+    number_low: int
+    number_high: int
 
 
 @dataclass(frozen=True)
@@ -55,14 +93,6 @@ class _Market:
     latitude: float
     longitude: float
     base_ppsf: int
-    # Half-width of the coordinate box, in degrees. Per-market because one box
-    # does not fit these three: Waikiki is a ~0.35-mile strip pinned between the
-    # Ala Wai Canal and the shoreline, so the +/-0.007 box inherited from a
-    # sprawling mainland ZIP put six of its listings in the Pacific -- which
-    # `st.map` on the market page renders faithfully, on the one page with no
-    # model in the loop to explain it.
-    jitter_lat: float
-    jitter_lon: float
     # Monthly association fee per square foot. Oahu's high-rise stock carries
     # roughly $0.65/sqft/mo; Hilo's is about half that. Derived rather than drawn
     # from a flat menu, because an uncorrelated fee put $165/mo on a $1.3M
@@ -71,8 +101,9 @@ class _Market:
     hoa_psf: float
     # Scoped to the ZIP: a shared pool put Kalakaua (the Waikiki street) in Hilo
     # and Banyan (Hilo) in Waikiki. Suffixes are part of the name, so Beach Walk
-    # and Wilhelmina Rise can exist and Kalakaua cannot come out a "St".
-    streets: tuple[str, ...]
+    # and Wilhelmina Rise can exist and Kalakaua cannot come out a "St". Each
+    # street carries its own anchor and number range -- see _Street.
+    streets: tuple[_Street, ...]
     # Waikiki is a wall of condo towers with essentially no detached housing;
     # Hilo is overwhelmingly single-family. A uniform draw across all three ZIPs
     # put 2,100-sqft single-family homes on Seaside Ave.
@@ -88,35 +119,69 @@ class _Market:
 _MARKETS = [
     _Market(
         city="Honolulu", state="HI", zip_code="96815",  # Waikiki
-        latitude=21.2795, longitude=-157.8292, base_ppsf=850,
-        jitter_lat=0.0045, jitter_lon=0.0065, hoa_psf=0.65,
+        latitude=21.2795, longitude=-157.8292, base_ppsf=850, hoa_psf=0.65,
+        # Waikiki runs NW-SE as a narrow strip between the Ala Wai Canal and the
+        # beach. Kalakaua is the beach-side spine, Kuhio one block inland, Ala
+        # Wai on the canal; the rest are the short cross streets between them.
         streets=(
-            "Kalakaua Ave", "Kuhio Ave", "Ala Wai Blvd", "Seaside Ave", "Lewers St",
-            "Kaiulani Ave", "Beach Walk", "Nohonani St", "Olohana St", "Paoakalani Ave",
+            _Street("Kalakaua Ave", 21.2778, -157.8272, 1800, 2900),
+            _Street("Kuhio Ave", 21.2792, -157.8268, 2100, 2600),
+            _Street("Ala Wai Blvd", 21.2812, -157.8288, 1700, 2400),
+            _Street("Seaside Ave", 21.2800, -157.8283, 300, 500),
+            _Street("Lewers St", 21.2807, -157.8324, 200, 400),
+            _Street("Kaiulani Ave", 21.2787, -157.8246, 100, 300),
+            _Street("Beach Walk", 21.2814, -157.8340, 200, 280),
+            _Street("Nohonani St", 21.2806, -157.8274, 200, 250),
+            _Street("Olohana St", 21.2818, -157.8306, 400, 500),
+            _Street("Paoakalani Ave", 21.2776, -157.8228, 200, 300),
         ),
         types=_pool(condo=18, townhouse=2),
     ),
     _Market(
         city="Honolulu", state="HI", zip_code="96816",  # Kaimuki / Diamond Head
-        latitude=21.2836, longitude=-157.7967, base_ppsf=780,
-        jitter_lat=0.0045, jitter_lon=0.0055, hoa_psf=0.65,
+        latitude=21.2836, longitude=-157.7967, base_ppsf=780, hoa_psf=0.65,
         streets=(
-            "Waialae Ave", "Koko Head Ave", "Wilhelmina Rise", "Pahoa Ave", "Kilauea Ave",
-            "Harding Ave", "Sierra Dr", "Palolo Ave", "Maunaloa Ave", "Diamond Head Rd",
+            _Street("Waialae Ave", 21.2835, -157.7975, 3000, 3800),
+            _Street("Koko Head Ave", 21.2830, -157.7960, 700, 1200),
+            _Street("Wilhelmina Rise", 21.2878, -157.7880, 1500, 2400),
+            _Street("Pahoa Ave", 21.2858, -157.7912, 1000, 1800),
+            _Street("Kilauea Ave", 21.2800, -157.7935, 2800, 3800),
+            _Street("Harding Ave", 21.2820, -157.7965, 1100, 1900),
+            _Street("Sierra Dr", 21.2884, -157.7902, 700, 1500),
+            _Street("Palolo Ave", 21.2896, -157.7888, 1900, 2500),
+            _Street("Maunaloa Ave", 21.2846, -157.7932, 700, 1300),
+            _Street("Ocean View Dr", 21.2890, -157.7858, 1900, 2600),
         ),
         types=_pool(single_family=12, condo=5, townhouse=3),
     ),
     _Market(
         city="Hilo", state="HI", zip_code="96720",
-        latitude=19.7220, longitude=-155.0870, base_ppsf=320,
-        jitter_lat=0.0070, jitter_lon=0.0080, hoa_psf=0.35,
+        latitude=19.7220, longitude=-155.0870, base_ppsf=320, hoa_psf=0.35,
+        # Downtown Hilo and the Waiakea side. Banyan Dr sits about a mile east on
+        # the bay and is left there deliberately: it is the one address in this
+        # market that a 1.5-mile comp radius will not reach from the others, so
+        # the thin-comp path stays exercised by geography rather than by size.
         streets=(
-            "Kinoole St", "Waianuenue Ave", "Kapiolani St", "Ponahawai St", "Haili St",
-            "Komohana St", "Puainako St", "Kamehameha Ave", "Banyan Dr", "Kilauea Ave",
+            _Street("Kinoole St", 19.7195, -155.0865, 200, 2000),
+            _Street("Waianuenue Ave", 19.7245, -155.0910, 100, 1200),
+            _Street("Kapiolani St", 19.7215, -155.0850, 100, 900),
+            _Street("Ponahawai St", 19.7230, -155.0885, 100, 1200),
+            _Street("Haili St", 19.7240, -155.0875, 100, 1000),
+            _Street("Komohana St", 19.7175, -155.0950, 500, 1900),
+            _Street("Puainako St", 19.7130, -155.0890, 100, 2000),
+            _Street("Kamehameha Ave", 19.7275, -155.0855, 100, 400),
+            _Street("Banyan Dr", 19.7290, -155.0700, 71, 131),
+            _Street("Kilauea Ave", 19.7205, -155.0870, 100, 1200),
         ),
         types=_pool(single_family=17, condo=2, townhouse=1),
     ),
 ]
+
+# Half-width of the per-street coordinate box, in degrees -- about 0.08 x 0.12
+# miles, so a listing lands on the block it is addressed to rather than anywhere
+# in the ZIP. Global because it describes a city block, not a market.
+_STREET_JITTER_LAT = 0.0012
+_STREET_JITTER_LON = 0.0018
 
 
 def _build_dataset() -> list[Listing]:
@@ -162,7 +227,10 @@ def _build_dataset() -> list[Listing]:
                 ppsf *= 0.9
             price = int(round(sqft * ppsf, -3))
 
-            # Deliberately sold-heavy: ~68% sold, ~10% pending, ~22% active.
+            # Deliberately sold-heavy. The bands are 75/8/17; the *realized*
+            # split over 108 draws is 76 sold / 10 pending / 22 active, which is
+            # what the README quotes -- band widths and realized shares are not
+            # the same number and only one of them is checkable.
             #
             # This is what makes months-of-inventory read correctly. MOI divides
             # standing inventory by the monthly rate of a *year* of sales, so at
@@ -182,13 +250,13 @@ def _build_dataset() -> list[Listing]:
             # `test_every_advertised_filter_value_exists_in_the_dataset` so a
             # future seed cannot quietly empty it again.
             roll = rng.random()
-            if roll < 0.68:
+            if roll < 0.75:
                 status = "sold"
                 days_back = rng.randint(5, 330)
                 sold_date = today - timedelta(days=days_back)
                 sold_price = int(round(price * rng.uniform(0.94, 1.03), -3))
                 days_on_market = rng.randint(4, 95)
-            elif roll < 0.78:
+            elif roll < 0.83:
                 status = "pending"
                 sold_date, sold_price = None, None
                 days_on_market = rng.randint(3, 40)
@@ -197,17 +265,20 @@ def _build_dataset() -> list[Listing]:
                 sold_date, sold_price = None, None
                 days_on_market = rng.randint(1, 120)
 
+            # The street is drawn first because everything else about the address
+            # hangs off it: the house number comes from that street's real range,
+            # and the coordinate from its anchor. Drawn independently they gave
+            # "3380 Beach Walk" on a two-block street, and a map pin a quarter
+            # mile from the street named beside it. The suffix is part of the
+            # name for the same reason -- drawn separately it produced "Kalakaua
+            # St" for an Ave, and could never produce Beach Walk at all.
+            street = rng.choice(market.streets)
+            house_number = rng.randint(street.number_low, street.number_high)
+
             listings.append(
                 Listing(
                     listing_id=f"MLS-{counter}",
-                    # The suffix is part of the name, not a separate draw. Drawn
-                    # independently it produced "Kalakaua St" and "Ala Wai Ln"
-                    # for streets that are an Ave and a Blvd, and could never
-                    # produce Beach Walk or Wilhelmina Rise at all -- invisible
-                    # with invented mainland names, wrong the moment the names
-                    # became real ones. Range capped at 3900 for the same
-                    # reason: none of these streets is numbered into the 9000s.
-                    address=f"{rng.randint(100, 3900)} {rng.choice(market.streets)}",
+                    address=f"{house_number} {street.name}",
                     city=market.city,
                     state=market.state,
                     zip_code=market.zip_code,
@@ -225,17 +296,20 @@ def _build_dataset() -> list[Listing]:
                     property_type=property_type,
                     status=status,
                     days_on_market=days_on_market,
-                    # Per-market box (see _MARKETS), sized so a realistic
-                    # 1-1.5 mile comp radius returns intra-ZIP neighbours
-                    # without scattering listings outside the ZIP's real extent.
+                    # Scattered around the street's own anchor, not the ZIP's.
+                    # A ZIP-wide box cannot work here: Waikiki is a narrow strip
+                    # along a *diagonal* shoreline, so every axis-aligned
+                    # rectangle covering it also covers open water, and eleven of
+                    # its listings plotted in the Pacific on `st.map`. Shrinking
+                    # the box only reduced the count -- the shape was the defect.
                     latitude=round(
-                        market.latitude
-                        + rng.uniform(-market.jitter_lat, market.jitter_lat),
+                        street.latitude
+                        + rng.uniform(-_STREET_JITTER_LAT, _STREET_JITTER_LAT),
                         6,
                     ),
                     longitude=round(
-                        market.longitude
-                        + rng.uniform(-market.jitter_lon, market.jitter_lon),
+                        street.longitude
+                        + rng.uniform(-_STREET_JITTER_LON, _STREET_JITTER_LON),
                         6,
                     ),
                     sold_price=sold_price,
@@ -340,6 +414,7 @@ class MockListingsProvider:
         months_back: int = 6,
         limit: int = 8,
         max_sqft_delta_pct: float | None = 0.30,
+        same_property_type: bool = True,
     ) -> Sequence[Listing]:
         _subject, comps, _rejected = self.comparables_with_diagnostics(
             listing_id,
@@ -347,6 +422,7 @@ class MockListingsProvider:
             months_back=months_back,
             limit=limit,
             max_sqft_delta_pct=max_sqft_delta_pct,
+            same_property_type=same_property_type,
         )
         return comps
 
@@ -358,6 +434,7 @@ class MockListingsProvider:
         months_back: int = 6,
         limit: int = 8,
         max_sqft_delta_pct: float | None = 0.30,
+        same_property_type: bool = True,
     ) -> tuple[Listing | None, list[Listing], dict[str, int]]:
         """Comps plus a count of what was screened out, and why.
 
@@ -373,7 +450,13 @@ class MockListingsProvider:
         # `not_sold` is a near-constant floor (every active and pending
         # listing), so it is kept separate from `stale`. Lumped together it
         # swamps the recency signal the analyst actually needs.
-        rejected = {"not_sold": 0, "stale": 0, "outside_radius": 0, "size_mismatch": 0}
+        rejected = {
+            "not_sold": 0,
+            "stale": 0,
+            "type_mismatch": 0,
+            "outside_radius": 0,
+            "size_mismatch": 0,
+        }
         scored: list[tuple[float, Listing]] = []
 
         for candidate in self._listings:
@@ -384,6 +467,16 @@ class MockListingsProvider:
                 continue
             if date.fromisoformat(candidate.sold_date) < cutoff:
                 rejected["stale"] += 1
+                continue
+            # Categorical, so it sits with the other categorical screens rather
+            # than in the geometry below. The score never weighed property type,
+            # so a townhouse in a condo-heavy ZIP was handed eight single-family
+            # comps and told by the CMA skill to require "same property type" --
+            # leaving it to drop the whole set with nothing in `screened_out`
+            # explaining why. Counted now, so a zero comp set reads as "no
+            # townhouses have sold near here" rather than as a thin market.
+            if same_property_type and candidate.property_type != subject.property_type:
+                rejected["type_mismatch"] += 1
                 continue
 
             distance = _miles_between(

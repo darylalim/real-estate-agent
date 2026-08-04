@@ -25,7 +25,7 @@ from langchain_core.tools import BaseTool
 from real_estate_agent.tools import make_market_tools
 from ui.provider import get_provider
 
-# The mock holds 66 listings; a real provider could hold far more. This is the
+# The mock holds ~100 listings; a real provider could hold far more. This is the
 # same ceiling `market_statistics` and `qualify_lead` use internally.
 _SEARCH_LIMIT = 500
 

@@ -36,7 +36,7 @@ from ui.elements import lazy_expander, stable_key
 
 SUGGESTIONS = {
     "Find homes": "Find 3-bed homes in Hilo under $600k and build me a shortlist.",
-    "Value a property": "What is MLS-1022 worth? Run a CMA and write it to the workspace.",
+    "Value a property": "What is MLS-1016 worth? Run a CMA and write it to the workspace.",
     "Read the market": (
         "Is Honolulu a buyer's or a seller's market right now, and how do you know?"
     ),

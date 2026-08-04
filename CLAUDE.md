@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 71 tests, ~0.9s, no API calls
+uv run pytest tests/ -q                          # full suite: 72 tests, ~1.3s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -323,7 +323,7 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   fixed seed is consumed in a fixed order, so changing the *parameters* of an `rng` call is safe while changing
   the *number* of calls reshuffles every listing after it. Two traps: `random.choice` rejection-samples through
   `_randbelow(len(seq))`, so a list of a different length consumes a different number of raw draws — which is
-  why the three `_STREETS` lists are each exactly ten entries — and the `lot_sqft` and `hoa_monthly` draws are
+  why each market's street tuple is exactly ten entries — and the `lot_sqft` and `hoa_monthly` draws are
   *conditional* on `property_type`, so they are not a constant offset. Measured: folding the street suffix into
   the name removed one draw per listing and moved the status split from 35/27/4 to 26/29/11, which broke the
   price-asymmetry invariant and put 29 cross-ZIP comps where there had been one. Nothing raised. If you must
