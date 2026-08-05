@@ -2,7 +2,8 @@
 
 [![check](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml/badge.svg)](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml)
 
-Real estate agent on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview).
+Real estate agent on
+[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview).
 
 An orchestrator that delegates to four specialists — property search, market
 analysis, document review, and client communication — each with its own tools,
@@ -38,83 +39,26 @@ uv run streamlit run streamlit_app.py
 Two pages over the same project:
 
 - **Chat** — the browser analogue of `main.py`. Drives the real orchestrator,
-  shows each delegation and tool result as it happens, and lists what the
-  specialists wrote to `/workspace/`. History is rendered from the checkpoint
-  database rather than from browser state, so a thread id printed by the CLI can
-  be pasted in and resumed here — and vice versa. The approval gate is a sidebar
-  toggle, and it fails closed the same way the CLI's does: a thread paused
-  mid-`save_draft` refuses to accept a new turn until the toggle is back on.
+  streams each delegation and tool result, and lists what the specialists wrote
+  to `/workspace/`. History comes from the checkpoint database rather than
+  browser state, so a thread id printed by the CLI can be pasted in and resumed
+  here, and vice versa. The approval gate is a sidebar toggle and fails closed
+  like the CLI's: a thread paused mid-`save_draft` refuses a new turn until the
+  toggle is back on.
 - **Market** — supply, pricing and absorption over the listings provider. No
-  model runs and no API key is needed. Its headline numbers come from the
-  agent's own `market_statistics` tool rather than a second implementation, so
-  the dashboard cannot quietly disagree with what the analyst was told.
+  model runs, no API key. Its headline numbers come from the agent's own
+  `market_statistics` tool rather than a second implementation, so the dashboard
+  cannot disagree with what the analyst was told.
 
-Both pages are themed from `.streamlit/config.toml` — native config, no CSS —
-and the theme defines light *and* dark, so the mode switch in the settings menu
-keeps working. Browsing a workspace artifact in the chat sidebar is an
-`st.fragment`, so picking a file does not re-read the checkpoint or re-render
-the conversation. Tool-result panels and the file preview render their contents
-only when opened — a collapsed `st.expander` still ships its body otherwise, so
-a long thread was re-sending every tool call's JSON on every turn.
+Three things to know before editing either page:
 
-Checks — all three must pass. No API calls, no key required:
-
-```bash
-scripts/check.sh              # runs all three with the pinned versions
-```
-
-Or individually:
-
-```bash
-uv run pytest tests/ -q       # 75 tests, ~1.3s
-uvx ty@0.0.65 check           # type check
-uvx ruff@0.16.1 check .       # lint
-```
-
-Development is pinned to Python 3.14, so the `requires-python = ">=3.11"` floor needs an explicit run —
-`--isolated` keeps it out of your project venv:
-
-```bash
-uv run --python 3.11 --isolated pytest tests/ -q
-```
-
-The definition of done is "N tests, ty clean, ruff clean", and both tool versions are pinned deliberately —
-each is pre-1.0, so an unpinned run can report a different result on identical source. ruff enforces its own
-pin via `required-version` and will refuse to run if you drop it; ty has no equivalent, so that one is on you.
-`ruff format` is deliberately **not** used here — see `CLAUDE.md`.
-
-CI (`.github/workflows/check.yml`) runs `scripts/check.sh --floor` on Linux for every push and PR, plus
-`uv sync --locked` so a stale `uv.lock` fails the build. It calls the script rather than restating the tools,
-which is the point of having the script: one place decides what "done" means. No secrets — the suite is
-entirely offline.
-
-That last claim is now enforced rather than asserted. It used to be false: `config.py` called `load_dotenv()`
-at import, `.env.example` documents `LANGSMITH_TRACING=true`, and so a developer with a real `.env` had every
-`tool.invoke()` in the suite reporting to LangSmith as its own root run — 17 per run, against a Stop hook that
-runs the suite on every turn. LangSmith bills per trace, so those one-span traces cost the same as full agent
-conversations, and the tests quietly outspent the runs actually worth tracing. CI never had the problem — a
-clean checkout has no `.env` — which is exactly why nothing in the build logs revealed it.
-
-**`.env` is now read by the entry points, not by the package.** Import-time `load_dotenv()` in a library module
-applies one developer's configuration to every consumer, and the trace bill was only its most expensive
-symptom; `REA_MODEL` silently handed the tests a different graph and `REA_PROJECT_ROOT` silently repointed the
-file roots they assert against. `main.py` and `streamlit_app.py` load it instead, and the ordering is
-load-bearing rather than cosmetic — `PROJECT_ROOT`, `DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated when
-`config.py` is imported, so `main.py` keeps the call *and* its package imports inside `main()`. One consequence
-worth knowing before embedding the package: `from real_estate_agent import build_agent` no longer picks up
-`.env` on its own, and a caller supplies the environment the way any other library expects.
-
-`tests/conftest.py` still forces tracing off, now as a second line rather than the only one, since a variable
-exported in a shell never went through `.env` at all. Live runs via `main.py` and Streamlit are untouched and
-trace normally.
-
-That last point is also what made the first guard useless, and it is worth knowing before trusting this one.
-`test_the_suite_does_not_trace_to_langsmith` originally asserted only that tracing was off, which is true by
-default anywhere there is no `.env` — so on CI it passed with the fix **deleted**, and the check fired only on
-the one machine that already had the problem. It now asserts the value the conftest writes, which is absent on
-a clean checkout and wrong on a configured one, so both fail; and a `pytest_collection_finish` hook aborts the
-session before the first tool call rather than reporting after the last, which also covers `-k`-filtered runs
-that never collect the test.
+- **Theming is `.streamlit/config.toml`** — native config, no CSS. It defines
+  light *and* dark, so the settings-menu mode switch keeps working.
+- **The chat sidebar's workspace browser is an `st.fragment`**, so picking a
+  file does not re-read the checkpoint or re-render the conversation.
+- **Tool-result panels and the file preview render only when opened.** A
+  collapsed `st.expander` ships its body otherwise, so a long thread re-sent
+  every tool call's JSON every turn.
 
 ## Architecture
 
@@ -146,7 +90,7 @@ already given.
 | `skills/` | Progressive-disclosure methodology, loaded on demand |
 | `workspace/` | Agent scratch space (gitignored) |
 | `streamlit_app.py`, `app_pages/`, `ui/` | The web UI — a consumer of the package, like `main.py` |
-| `.streamlit/config.toml` | Theme, in both light and dark. No CSS anywhere in the app |
+| `.streamlit/config.toml` | Theme, in both light and dark |
 
 ## Plugging in real listings data
 
@@ -184,31 +128,29 @@ single global value was wrong for at least one of the three:
   wherever a fee has to be compared against a price, in both the CMA adjustment
   grid and `qualify_lead`, so one fee cannot be worth two amounts on one screen.
 
-Addresses are anchored on the street, not the ZIP. Each street carries its own
-coordinates and its real house-number range, so `238 Beach Walk` lands on Beach
-Walk and cannot be numbered into the 3000s on a two-block street. That replaced
-a per-ZIP coordinate box, which could not work here for a reason worth keeping:
-Waikiki is a narrow strip along a **diagonal** shoreline, so every axis-aligned
-rectangle covering it also covers open water. Shrinking the box cut the number
-of listings in the Pacific from six to none by the flat-latitude test that was
-used to check it, and left eleven there when measured against the real coast —
-the shape was the defect, and a test whose boundary is chosen to match the fix
+Addresses are anchored on the street, not the ZIP: each street carries its own
+coordinates and real house-number range, so `238 Beach Walk` lands on Beach Walk
+rather than in the 3000s of a two-block street. It replaced a per-ZIP coordinate
+box, which cannot work here — Waikiki is a narrow strip along a **diagonal**
+shoreline, so every axis-aligned rectangle covering it also covers open water.
+Shrinking the box cut listings in the Pacific from six to none by the
+flat-latitude test used to check it, and left eleven when measured against the
+real coast: the shape was the defect, and a test whose boundary matches the fix
 can only confirm it.
 
 The dataset is deliberately sold-heavy — 76 closed against 22 active — because
 months-of-inventory divides standing inventory by the monthly rate of a *year*
-of sales, so a market at four months needs roughly three times as many closed
-records as active ones. The payoff is that the two markets now read differently:
-Honolulu lands at 2.8 months (seller's) and Hilo at 5.0 (balanced), where the
-previous fixture reported a deep buyer's market for both and never exercised
-the other branches at all.
+of sales, so a market at four months needs roughly three closed records per
+active one. The payoff: Honolulu lands at 2.8 months (seller's) and Hilo at 5.0
+(balanced), where the previous fixture reported a deep buyer's market for both
+and never exercised the other branches.
 
 Comps are screened on property type as well as size, and `screened_out` reports
 both. Without it the scorer — which weighs distance, size, beds and age, but
 never type — handed a Waikiki townhouse eight single-family comps while the CMA
-methodology told the analyst to require the same type, with nothing in the
-payload explaining the contradiction. Pass `same_property_type=False` to widen
-deliberately; that is a weaker comparison, not a neutral one.
+methodology required the same type, with nothing in the payload explaining the
+contradiction. Pass `same_property_type=False` to widen deliberately; that is a
+weaker comparison, not a neutral one.
 
 ## Skills vs. prompts
 
@@ -228,24 +170,26 @@ declares it explicitly in `subagents.py`.
   everything else is read-only. Rules are evaluated **in order, first match
   wins** — the allows must precede the catch-all deny.
 - **No send capability, by design.** The agent cannot send email. `save_draft`
-  writes three artifacts and stops:
-  a `.md` (readable canonical copy), a `.eml` carrying `X-Unsent: 1` so a mail
-  client opens it as an editable draft, and a `mailto:` URL in the return value
-  for one-click compose (omitted above ~1800 chars, where clients truncate).
-  A human still reads the text and presses send — which keeps accountability
-  with the licensed person, where fair-housing and agency law put it.
-  If you later add real delivery, gate it: `build_agent(require_approval=True)`
-  pauses `save_draft` for approval. The CLI's checkpointer is durable, so a
-  pending approval survives the process — reject is not the same as walking away.
+  writes three artifacts and stops: a `.md` (readable canonical copy), a `.eml`
+  carrying `X-Unsent: 1` so a mail client opens it as an editable draft, and a
+  `mailto:` URL in the return value for one-click compose (omitted above ~1800
+  chars, where clients truncate). A human still reads the text and presses
+  send — which keeps accountability with the licensed person, where
+  fair-housing and agency law put it. If you later add real delivery, gate it:
+  `build_agent(require_approval=True)` pauses `save_draft` for approval. The
+  CLI's checkpointer is durable, so a pending approval survives the process —
+  reject is not the same as walking away.
 - **Path traversal.** Document filenames come from model output, so they are
   resolved and confined to the documents directory before any read.
-- **No shell.** The `execute` tool appears in the tool list but errors out —
-  it requires a sandbox backend, and `FilesystemBackend` is not one.
-- **Fair housing.** The `client-comms` skill carries explicit prohibited-language
-  rules for listing copy, and `cma-analysis` forbids demographic adjustments.
+- **No shell.** The `execute` tool appears in the tool list but errors out — it
+  requires a sandbox backend, and `FilesystemBackend` is not one.
+- **Fair housing.** The `client-comms` skill carries explicit
+  prohibited-language rules for listing copy, and `cma-analysis` forbids
+  demographic adjustments.
 
 The agent is an assistant, not a licensed professional. Prompts and skills push
-it to recommend an attorney, appraiser, or lender rather than substitute for one.
+it to recommend an attorney, appraiser, or lender rather than substitute for
+one.
 
 ## Configuration
 
@@ -256,14 +200,85 @@ it to recommend an attorney, appraiser, or lender rather than substitute for one
 | `REA_MODEL` | `anthropic:claude-opus-5` | Orchestrator. LangChain needs the `provider:model` prefix. |
 | `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
 
+## Development
+
+Three checks, all of which must pass. No API calls, no key required:
+
+```bash
+scripts/check.sh              # runs all three with the pinned versions
+```
+
+Or individually:
+
+```bash
+uv run pytest tests/ -q       # 75 tests, ~1.3s
+uvx ty@0.0.65 check           # type check
+uvx ruff@0.16.1 check .       # lint
+```
+
+Development is pinned to Python 3.14, so the `requires-python = ">=3.11"` floor
+needs an explicit run. `--isolated` keeps it out of your project venv:
+
+```bash
+uv run --python 3.11 --isolated pytest tests/ -q
+```
+
+The definition of done is "N tests, ty clean, ruff clean", and both tool
+versions are pinned deliberately — each is pre-1.0, so an unpinned run can
+report a different result on identical source. ruff enforces its own pin via
+`required-version` and will refuse to run if you drop it; ty has no equivalent,
+so that one is on you. `ruff format` is deliberately **not** used here — see
+`CLAUDE.md`.
+
+### CI
+
+`.github/workflows/check.yml` runs `scripts/check.sh --floor` on Linux for every
+push and PR, plus `uv sync --locked` so a stale `uv.lock` fails the build. It
+calls the script rather than restating the tools, which is the point of having
+the script: one place decides what "done" means. No secrets — the suite is
+entirely offline.
+
+### Why "offline" is enforced rather than asserted
+
+That claim used to be false, and how it failed is worth keeping in view.
+
+**The defect.** `config.py` called `load_dotenv()` at import and `.env.example`
+documents `LANGSMITH_TRACING=true`, so a developer with a real `.env` had every
+`tool.invoke()` in the suite reporting to LangSmith as its own root run — 17 per
+run, against a Stop hook that runs the suite every turn. LangSmith bills per
+trace, so those one-span traces cost the same as full agent conversations, and
+the tests outspent the runs worth tracing. CI never had the problem — a clean
+checkout has no `.env` — which is why nothing in the build logs revealed it.
+
+**The fix: `.env` is read by the entry points, not by the package.** Import-time
+`load_dotenv()` in a library module applies one developer's configuration to
+every consumer, and the trace bill was only its most expensive symptom —
+`REA_MODEL` handed the tests a different graph, `REA_PROJECT_ROOT` repointed the
+file roots they assert against. The ordering is load-bearing: `PROJECT_ROOT`,
+`DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated when `config.py` is imported,
+so `main.py` keeps the call *and* its package imports inside `main()`. One
+consequence for library use — `from real_estate_agent import build_agent` no
+longer picks up `.env` on its own, so a caller supplies the environment the way
+any other library expects. `tests/conftest.py` still forces tracing off as a
+second line, since a variable exported in a shell never went through `.env` at
+all. Live runs via `main.py` and Streamlit trace normally.
+
+**The guard that proved nothing.** `test_the_suite_does_not_trace_to_langsmith`
+originally asserted only that tracing was off, which is true by default anywhere
+there is no `.env` — so on CI it passed with the fix **deleted**, and the check
+fired only on the one machine that already had the problem. It now asserts the
+value the conftest writes, which is absent on a clean checkout and wrong on a
+configured one, so both fail. A `pytest_collection_finish` hook also aborts the
+session before the first tool call rather than reporting after the last, which
+covers `-k`-filtered runs that never collect the test.
+
 ## Verified behaviour
 
-Both tables below were run against the **previous** Austin/Round Rock fixture,
-and the listing ids and statuses in them are from that dataset — `MLS-1022` was
-a pending Austin townhouse and is now a sold Waikiki condo. The behaviours each
-row checks are unchanged and still hold; the specific evidence is not
-reproducible without regenerating that dataset. Re-run rather than re-read if
-you need the ids.
+Both tables ran against the **previous** Austin/Round Rock fixture, so their
+listing ids and statuses are from that dataset — `MLS-1022` was a pending Austin
+townhouse and is now a sold Waikiki condo. The behaviours each row checks still
+hold; the specific evidence is not reproducible without regenerating that
+dataset. Re-run rather than re-read if you need the ids.
 
 ### The CLI
 
@@ -291,9 +306,11 @@ Then run live against the same model, with approval switched on:
 | Approve | `.md` and `.eml` both written, `X-Unsent: 1` present, real listing data, and the model flagged the pending status rather than guessing whether the contract would close |
 | Workspace browser | Populated as specialists wrote; the checkpoint database stayed out of it |
 
-Five defects, since fixed and regression-tested — three the run exposed, two a
+### Defects — Streamlit widget state
+
+Five, since fixed and regression-tested: three the web-UI run exposed, two a
 later code review found in the same family. All five are one Streamlit rule —
-**widget state is keyed and lifecycle-bound** — and none of them raised:
+**widget state is keyed and lifecycle-bound** — and none of them raised.
 
 - **The approval toggle switched itself off.** `st.rerun()` fires from inside
   the sidebar, which aborts the run before any widget declared after it renders
@@ -331,23 +348,27 @@ interrupt: an identical filename and subject with a changed body — the exact
 shape the stale-argument bug hid — displayed the new body, and the text written
 on approval matched the text on screen byte for byte.
 
-Three defects the CLI run above exposed, since fixed:
+### Defects the CLI run exposed
 
-- `comparables()` ranked by similarity but never **rejected** on size, handing
+Three, since fixed:
+
+- **`comparables()` ranked by similarity but never *rejected* on size**, handing
   back comps the CMA methodology discards anyway. It now applies a size screen
   and reports what it filtered, so a thin comp set is distinguishable from a
   thin market.
-- The mock spread square footage too widely for the dataset size, so small
+- **The mock spread square footage too widely for the dataset size**, so small
   properties had no size-matched comps and no CMA was possible. Sizes now
   cluster; 17 of 22 active listings clear the 3-comp minimum, and the other 5
   remain genuine outliers so the insufficient-comps path stays reachable.
-- client-liaison had two ways to write a draft and used both, producing
+- **client-liaison had two ways to write a draft** and used both, producing
   divergent copies. `save_draft` is now the only sanctioned path.
 
-A later code review found more, since fixed and regression-tested:
+### Defects a later code review found
 
-- **`--require-approval` was unusable.** The resume payload was a bare list,
-  but the middleware reads `interrupt(request)["decisions"]` — so answering the
+Since fixed and regression-tested:
+
+- **`--require-approval` was unusable.** The resume payload was a bare list, but
+  the middleware reads `interrupt(request)["decisions"]` — so answering the
   prompt raised `TypeError` on both approve and reject. It also built one
   decision regardless of how many tool calls were pending, which the middleware
   rejects outright.
@@ -356,18 +377,19 @@ A later code review found more, since fixed and regression-tested:
   reading from balanced to extreme buyer's market. The window is now applied to
   the sales themselves, via a `sold_within_months` provider filter.
 - **`qualify_lead` blamed the budget for a bedroom shortfall**, reporting a $2M
-  budget in a sub-$800k market as clearing "only 8% of inventory". Budget share is
-  now measured against listings that already meet the non-price requirements.
+  budget in a sub-$800k market as clearing "only 8% of inventory". Budget share
+  is now measured against listings that already meet the non-price requirements.
 - **`status="Active"` returned zero listings** — string filters were
   case-sensitive, which reads to the agent as an empty market. Now
   case-insensitive, and the tool exposes proper enums.
 - **A newline in an email subject** raised after the `.md` was already written,
   leaving an orphan pointing at a `.eml` that never existed. Headers are
   flattened first and the message is built before anything is written.
-- Plus: same-second drafts no longer clobber each other, text extraction is
-  size-capped like the PDF branch, `lot_sqft` can't go negative, the dataset has
-  one `_TODAY`, and `require_api_key` derives the needed key from the model's
-  provider prefix instead of always demanding an Anthropic one.
+- **Plus, in the same pass:** same-second drafts no longer clobber each other,
+  text extraction is size-capped like the PDF branch, `lot_sqft` can't go
+  negative, the dataset has one `_TODAY`, and `require_api_key` derives the
+  needed key from the model's provider prefix instead of always demanding an
+  Anthropic one.
 
 ## Notes on deepagents 0.7.1
 
