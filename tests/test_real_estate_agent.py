@@ -796,12 +796,16 @@ def test_resuming_a_pending_approval_without_the_flag_refuses() -> None:
 # --- agent wiring ---------------------------------------------------------
 
 
-def test_agent_exposes_planning_and_delegation(monkeypatch) -> None:
-    """`write_todos` is not automatic in 0.7.1 — the orchestrator prompt needs it."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
-    from real_estate_agent.agent import build_agent
+def _tool_names(agent) -> set[str]:
+    """Every tool name reachable from a compiled graph's tool node.
 
-    agent = build_agent()
+    A *set*, deliberately: the same collection is reachable by more than one
+    attribute path (``tools`` and ``tools_by_name`` on the same object), so any
+    count taken here reports aliasing rather than registration. Whether a tool
+    is registered twice is asked by
+    ``test_planning_middleware_is_pinned_because_it_is_not_automatic`` instead,
+    which varies the input rather than counting the output.
+    """
     names: set[str] = set()
 
     def walk(obj: object, depth: int = 0) -> None:
@@ -819,9 +823,62 @@ def test_agent_exposes_planning_and_delegation(monkeypatch) -> None:
                 walk(value, depth + 1)
 
     walk(agent.nodes.get("tools"))
+    return names
+
+
+def test_agent_exposes_planning_and_delegation(monkeypatch) -> None:
+    """`write_todos` is not automatic (0.7.1, re-verified 0.7.8) — the prompt needs it."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    from real_estate_agent.agent import build_agent
+
+    names = _tool_names(build_agent())
     assert "write_todos" in names
     assert "task" in names
     assert {"read_file", "write_file", "ls"} <= names
+
+
+def test_planning_middleware_is_pinned_because_it_is_not_automatic(monkeypatch) -> None:
+    """The pin in `agent.py` must stay load-bearing, not become a duplicate.
+
+    `build_agent` passes `middleware=[TodoListMiddleware()]` because deepagents
+    does not add it itself — true on 0.7.1 and re-verified on 0.7.8. If a later
+    release starts adding it, that pin silently becomes a *second* registration
+    of `write_todos`, which the model rejects at request time and no existing
+    test sees: `test_agent_exposes_planning_and_delegation` collects names into
+    a set, so a duplicate is indistinguishable from the single one it wants.
+
+    Counting registrations cannot answer this — the same tool collection is
+    reachable by several attribute paths, so every tool already appears more
+    than once. So vary the *input* instead and diff the outputs: build the same
+    graph with and without the explicit middleware. `write_todos` must appear
+    only in the pinned build. When this goes red the fix is to drop the pin from
+    `agent.py`, not to loosen the assertion.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    from deepagents import create_deep_agent
+    from deepagents.backends import FilesystemBackend
+    from langchain.agents.middleware import TodoListMiddleware
+
+    from real_estate_agent.config import PROJECT_ROOT
+
+    def build(middleware):
+        return create_deep_agent(
+            model="anthropic:claude-opus-5",
+            system_prompt="construction only",
+            middleware=middleware,
+            backend=FilesystemBackend(root_dir=PROJECT_ROOT, virtual_mode=True),
+        )
+
+    bare = _tool_names(build([]))
+    pinned = _tool_names(build([TodoListMiddleware()]))
+
+    assert "write_todos" not in bare, (
+        "deepagents now adds TodoListMiddleware itself; the explicit pin in "
+        "agent.py is a duplicate registration — drop the pin"
+    )
+    assert "write_todos" in pinned
+    # Nothing else may differ, or the pin is doing more than planning.
+    assert pinned - bare == {"write_todos"}
 
 
 def test_subagents_carry_their_own_skills() -> None:
@@ -1127,7 +1184,8 @@ def test_the_workspace_browser_is_a_fragment() -> None:
 
 # The next three pin one Streamlit rule, a layer under the widget-state family
 # above: **a collapsed expander still renders its body**, and **a stateful
-# expander's identity is its parameters**. Both halves were measured on 1.60 --
+# expander's identity is its parameters**. Both halves were measured on 1.60 and
+# re-measured on 1.62 --
 # two same-label stateful expanders in one run raise StreamlitDuplicateElementId
 # and the page renders nothing; a shared constant key raises
 # StreamlitDuplicateElementKey instead. So the danger runs both ways: too little

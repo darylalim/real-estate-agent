@@ -196,9 +196,23 @@ one.
 | Variable | Default | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | Required. |
-| `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` / `LANGSMITH_PROJECT` | — | Recommended. Current names; `LANGCHAIN_*` no longer works. |
+| `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` / `LANGSMITH_PROJECT` | — | Recommended. Current names — use these. The legacy `LANGCHAIN_*` spellings still work as fallbacks (see below). |
 | `REA_MODEL` | `anthropic:claude-opus-5` | Orchestrator. LangChain needs the `provider:model` prefix. |
 | `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
+
+**On the legacy `LANGCHAIN_*` names.** An earlier version of this table said they
+"no longer work". That is wrong, and worth stating precisely because the mistake
+runs in the unsafe direction: langsmith 0.11.1 still reads nine of them —
+`LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT`,
+`LANGCHAIN_SESSION`, `LANGCHAIN_ENDPOINT`, `LANGCHAIN_BASE_URL`,
+`LANGCHAIN_CUSTOM_HEADERS`, `LANGCHAIN_REVISION_ID`, `LANGCHAIN_LOG`. Measured:
+`LANGCHAIN_TRACING_V2=true` alone turns tracing **on**, and `LANGCHAIN_API_KEY`
+and `LANGCHAIN_PROJECT` are both honoured. So a stale legacy variable in a shell
+profile can start billing traces even though nothing in `.env` mentions
+LangSmith. The `LANGSMITH_*` spellings take precedence where both are set —
+`LANGSMITH_TRACING=false` beats `LANGCHAIN_TRACING_V2=true`, which is why
+`tests/conftest.py` assigning the modern name is sufficient to keep the suite
+offline. Prefer the `LANGSMITH_*` names; don't assume the old ones are inert.
 
 ## Development
 
@@ -211,7 +225,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 75 tests, ~1.3s
+uv run pytest tests/ -q       # 76 tests, ~1.4s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -391,9 +405,16 @@ Since fixed and regression-tested:
   needed key from the model's provider prefix instead of always demanding an
   Anthropic one.
 
-## Notes on deepagents 0.7.1
+## Notes on deepagents 0.7.8
 
 `write_todos` is **not** added automatically. The middleware stack resolves from
 a per-`provider:model` harness profile, so planning may or may not be present
 depending on the model string. `agent.py` pins `TodoListMiddleware()` explicitly
 rather than depending on that resolution — `tests/` asserts it stays wired.
+
+This held on 0.7.1 and was re-verified on 0.7.8 by building the graph with and
+without the explicit middleware and diffing the tool list: `write_todos` appears
+only in the pinned build. Write containment was re-verified the same way — the
+first-match-wins rule evaluation and the unmatched-defaults-to-allow fallback are
+unchanged, and the `execute` tool still refuses to run because `FilesystemBackend`
+is not a `SandboxBackendProtocol`.

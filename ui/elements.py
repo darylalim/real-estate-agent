@@ -13,9 +13,9 @@ are two halves of one thing. Drop the flag and results stop rendering entirely;
 drop the guard and the payload silently comes back.
 
 **A stateful expander's identity is its parameters, not its position.** Measured
-on 1.60: two ``st.expander`` calls with the same label and no key raise
-``StreamlitDuplicateElementId`` and the page renders *nothing*, while two with
-different labels coexist. So the moment an expander becomes stateful, any two
+on 1.60 and re-measured on 1.62: two ``st.expander`` calls with the same label
+and no key raise ``StreamlitDuplicateElementId`` and the page renders *nothing*,
+while two with different labels coexist. So the moment an expander becomes stateful, any two
 that could ever render with the same label in one run need distinct keys or the
 page dies. That is why ``lazy_expander`` makes ``key`` mandatory rather than
 optional -- and why a *constant* key is worse than none, since it raises

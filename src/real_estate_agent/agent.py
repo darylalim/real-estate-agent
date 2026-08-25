@@ -136,10 +136,11 @@ def build_agent(
     if checkpointer is None:
         checkpointer = InMemorySaver()
 
-    # In 0.7.1 the planning middleware is *not* added automatically — the
-    # middleware stack is resolved from a per-`provider:model` harness profile,
-    # so `write_todos` may or may not exist depending on the model string.
-    # The orchestrator prompt depends on it, so pin it explicitly.
+    # The planning middleware is *not* added automatically — verified on 0.7.1
+    # and again on 0.7.8. The middleware stack is resolved from a
+    # per-`provider:model` harness profile, so `write_todos` may or may not
+    # exist depending on the model string. The orchestrator prompt depends on
+    # it, so pin it explicitly.
     return create_deep_agent(
         model=model,
         system_prompt=ORCHESTRATOR_PROMPT,

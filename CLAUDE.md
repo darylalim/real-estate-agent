@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A real estate agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.7.1: an
+A real estate agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.7.8: an
 orchestrator that holds no domain tools and delegates to four specialists over a shared `/workspace/` filesystem.
 
 `README.md` is current and detailed — it covers the safety rationale, the live-run verification table, and the
@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 75 tests, ~1.3s, no API calls
+uv run pytest tests/ -q                          # full suite: 76 tests, ~1.4s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -281,11 +281,17 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   - A custom theme with only `[theme]` removes the light/dark switch from the settings menu. Every one of
     the skill's twelve bundled templates ships exactly that, so starting from one costs you the switch.
     Colour lives in `[theme.light]` / `[theme.dark]` here (plus their `.sidebar` sub-tables).
-  - **`chartCategoricalColors` is registered at `[theme]` only.** Under `[theme.light]` it logs "not a
-    valid config option" to stderr and is dropped — the app starts, looks styled, and charts fall back to
-    the built-in palette. So the chart palette **cannot** differ between modes; the one in the file is
-    picked to clear 3:1 on both backgrounds. `test_every_theme_setting_is_a_real_config_option` asks
-    `st.get_option` about every leaf key rather than keeping a second list of what is valid.
+  - **`chartCategoricalColors` moved between modes in 1.62, and the constraint it used to impose is
+    gone.** On 1.60 it was registered at `[theme]` **only**: under `[theme.light]` it logged "not a valid
+    config option" to stderr and was dropped — the app started, looked styled, and charts fell back to the
+    built-in palette. As of 1.62 it is registered in all six locations (`[theme]`, `[theme.sidebar]`,
+    `[theme.light]`, `[theme.dark]`, and both `.sidebar` sub-tables), measured by asking
+    `streamlit.config._config_options` on each version directly. So the chart palette **can** now differ
+    between light and dark. The one in the file is still a single `[theme]` entry picked to clear 3:1 on
+    both backgrounds, which remains valid and is the reason nothing broke — but the old "cannot differ"
+    reasoning no longer applies, so don't cite it to reject a per-mode palette.
+    `test_every_theme_setting_is_a_real_config_option` asks `st.get_option` about every leaf key rather
+    than keeping a second list of what is valid, which is why it stayed green across the move.
   - **Heading sizes set in `[theme]` are not inherited by the sidebar** — Streamlit's own option
     description says so. `[theme.sidebar]` restates them.
 
@@ -297,7 +303,8 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   A stable `key=` on that table was tried and **dropped**: the general advice is that an unkeyed
   dataframe's identity includes its data, so a filter change remounts it and loses the reader's sort —
   but measured on 1.60, sorting by price and then switching property type kept the sort *with and
-  without* the key, on a clean server restart each way. Don't re-add it on the strength of the advice
+  without* the key, on a clean server restart each way. **Not re-measured on 1.62** — it needs a real
+  browser, and `AppTest` cannot model a client-side sort. Don't re-add it on the strength of the advice
   alone; this table takes the default `on_select="ignore"`, and whatever the rule applies to, it is not
   this. Re-measure if that argument ever changes.
 - **A collapsed `st.expander` still renders its body, and making one lazy makes it a widget.** Both halves
@@ -308,10 +315,12 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   **deliberately not** — it wraps a form, and a lazily rendered form widget loses its state, which is the
   dead-Load-button defect the README already lists.
   - `on_change="rerun"` is what makes `.open` a boolean; under the default `"ignore"` it is `None`, so
-    dropping the flag makes every guard false and results stop rendering *at all*.
-  - **A lazy expander needs a key that varies, and a constant key is worse than none.** Measured on 1.60:
-    two same-label stateful expanders raise `StreamlitDuplicateElementId` and the page renders nothing; a
-    shared constant key raises `StreamlitDuplicateElementKey` instead. Identity is the **parameter tuple,
+    dropping the flag makes every guard false and results stop rendering *at all*. Still true on 1.62,
+    measured directly: `.open` is `None` under the default and `False` under `on_change="rerun"`.
+  - **A lazy expander needs a key that varies, and a constant key is worse than none.** Measured on 1.60
+    and re-measured on 1.62 under `AppTest`: two same-label stateful expanders raise
+    `StreamlitDuplicateElementId` and the page renders nothing; a shared constant key raises
+    `StreamlitDuplicateElementKey` instead; two distinct keys both render. Identity is the **parameter tuple,
     never the position** — an earlier version of this file said the opposite. The panel label is
     `name · N chars`, so two `search_listings` results of equal length collide; the preview's label is the
     constant `"Preview"`, so without a per-file key one file's open state applies to the next one picked.
@@ -341,9 +350,14 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
 - **Permission rules are order-sensitive: first match wins, and an unmatched path defaults to *allow*.** The
   allows in `WORKSPACE_PERMISSIONS` must precede the catch-all write deny. `test_permission_matrix` imports the
   live list rather than copying it, so reordering it fails the test.
-- **`write_todos` is not added automatically in deepagents 0.7.1.** The middleware stack resolves from a
-  per-`provider:model` harness profile, so planning may vanish just by changing the model string. `agent.py`
-  pins `TodoListMiddleware()` explicitly.
+- **`write_todos` is not added automatically in deepagents — verified on 0.7.1 and again on 0.7.8.** The
+  middleware stack resolves from a per-`provider:model` harness profile, so planning may vanish just by
+  changing the model string. `agent.py` pins `TodoListMiddleware()` explicitly. Re-verify on a version bump
+  by building the graph both ways and diffing the tool list — `create_deep_agent(...)` with and without
+  `middleware=[TodoListMiddleware()]`; on 0.7.8 `write_todos` appears only in the pinned build. Note what
+  `test_agent_exposes_planning_and_delegation` cannot tell you: it collects names into a **set**, so if a
+  future release starts adding the middleware itself, the resulting duplicate registration is invisible to
+  it and surfaces only as an API error on a live run.
 - **Models need the LangChain `provider:model` prefix.** A bare `claude-opus-5` will not resolve.
   `require_api_key()` derives which key to demand from that prefix.
 - **`.env` is loaded by the entry points, never at package import.** `config.py` used to call `load_dotenv()`
