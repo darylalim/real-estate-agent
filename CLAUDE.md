@@ -82,8 +82,10 @@ hoisted; only `documents.py`'s lazy `pypdf` and `__init__.py`'s lazy `build_agen
 **Run the 3.11 leg before changing anything the type system touches.** `.python-version` pins development to
 3.14, so without it the `requires-python = ">=3.11"` floor is never executed on any machine — the promise
 would be checked only by ty's syntax-level view, never at runtime. `--isolated` builds a throwaway environment
-so your 3.14 venv is untouched; it costs one resolve, then ~3s. If it ever fails, the honest fix is usually to
-narrow `requires-python`, not to delete the leg.
+so your 3.14 venv is untouched — and rebuilds it on every run, so there is no warm case: measured at ~27s
+warm and ~37s cold, of which ~22s is the suite itself on 3.11 against ~1.4s on 3.14. **No hook runs it**, and
+that cost is why. If it ever fails, the honest fix is usually to narrow `requires-python`, not to delete the
+leg.
 
 The whole suite runs offline, and that is now **arranged rather than assumed** — it was false for the repo's
 first 31 commits. `test_agent_exposes_planning_and_delegation` builds the real graph under a dummy key to
@@ -143,8 +145,9 @@ Three things it buys that nothing else here does:
 - **`uv sync --locked`.** It fails rather than re-resolving, so this is the only check anywhere that
   `uv.lock` is still current with `pyproject.toml`. `uv run` inside `check.sh` syncs too, but silently.
 
-`--floor` is on in CI and opt-in locally: the 3.11 leg costs a resolve you don't want on every Stop hook, and
-running it somewhere is most of the reason to have a second machine.
+`--floor` is on in CI and opt-in locally: the 3.11 leg costs ~27s you don't want on every Stop hook — it was
+gated there once and is now gone from the hook entirely — and running it somewhere is most of the reason to
+have a second machine.
 
 No secrets, by construction. The suite is offline and the one test that builds the real graph injects its own
 dummy `ANTHROPIC_API_KEY`, so `permissions: contents: read` is enough — don't add a key to make some future
@@ -156,39 +159,94 @@ trailing comment; bump both halves together.
 
 ## The hooks in `.claude/`
 
-Five hooks, checked in, active only inside Claude Code. They are **local convenience, not a gate anyone else
-inherits** — a clone without Claude Code gets none of them, which is why the enforcement that matters lives in
-`pyproject.toml`, `scripts/check.sh`, `tests/`, and now CI.
+Two hooks and a `permissions.deny` block, checked in, active only inside Claude Code. They are **local
+convenience, not a gate anyone else inherits** — a clone without Claude Code gets none of them, which is why
+the enforcement that matters lives in `pyproject.toml`, `scripts/check.sh`, `tests/`, and CI.
 
 | Hook | Event | Does |
 |---|---|---|
-| `session-start.sh` | SessionStart | Records the starting commit, so the Stop gate can see work committed mid-turn |
-| `static-gate.sh` | PostToolUse(Edit\|Write) | ruff + ty on `.py` edits, 0.12s |
-| `protect-files.sh` | PreToolUse | Denies `.env` and `uv.lock` via Edit/Write/NotebookEdit, and `.env` reads via Bash |
-| `confirm-live-run.sh` | PreToolUse | Asks before `main.py` and `streamlit run` — the two commands that reach the model |
-| `done-gate.sh` | Stop | `scripts/check.sh` always; the 3.11 floor leg when Python changed |
+| `confirm-live-run.sh` | PreToolUse(Bash) | Asks before `main.py` and `streamlit run` — the two commands that reach the model |
+| `done-gate.sh` | Stop | `scripts/check.sh`, unconditionally |
 
-Both `PreToolUse` hooks share one registration in `.claude/settings.json` — a single
-`"matcher": "Edit|Write|NotebookEdit|Bash"` block listing both scripts — so `confirm-live-run.sh` is invoked on
-Edit and Write too, not just Bash. It exits 0 when there is no command to inspect, so this costs nothing, but
-don't read the table above as saying each hook sees only the tools it cares about.
+**Three hooks and a shared library were deleted on 2026-08-25.** Each was a decision rather than a tidy-up, and
+the reasons differ:
 
-Four more things worth knowing before editing:
+- **`protect-files.sh` → native `permissions.deny`.** The hook matched shell strings; the deny list in
+  `.claude/settings.json` names paths — `Read`/`Edit`/`Write` on `./.env` and `./.streamlit/secrets.toml`,
+  `Edit`/`Write` on `./uv.lock`. Measured on this checkout, the swap is **stronger in one direction, weaker in
+  another, and a boundary in neither.** Stronger: `cat .env` is denied, and so is `E=.env; cat $E` — the exact
+  bypass the hook's own header conceded — so the check parses the command and resolves simple assignments
+  rather than matching text, which `echo .env` running confirms. `printf "" >> .env` is denied too. Weaker: it
+  does not look at *read* redirection, so `wc -c < .env` runs, and so does `cat < .env`, which the deleted
+  regex did catch because its `[^|&;]*` spanned the `< `. That is the accidental-key-into-the-transcript case
+  the rule exists for, and it is open. Filenames moved as well: `.streamlit/secrets.toml` is new, `.env.*` is
+  gone. The glob is restorable — these are gitignore-style patterns, so `Read(./.env.*)` works — but not for
+  free, because it also matches `.env.example`, the tracked template `cp .env.example .env` copies from, and a
+  deny list has no negation. The old hook special-cased that by hand.
+- **`static-gate.sh` → nothing.** ruff + ty on every `.py` edit is gone, so static checking now happens only
+  at the Stop gate. That is a real trade in latency-to-signal — a type error surfaces at the end of the turn
+  rather than at the edit that caused it — taken because `check.sh` covers the same ground and an edit-heavy
+  turn was paying for both.
+- **`session-start.sh` → deleted with the floor leg it existed to serve.** `done-gate.sh` used to run
+  `uv run --python 3.11 --isolated pytest` whenever `*.py` had changed since a baseline commit the SessionStart
+  hook recorded. Three measured reasons it went: the leg costs ~27s warm and ~37s cold, not the 7s the hook's
+  header claimed — `--isolated` rebuilds the environment every run, and the suite alone is ~22s on 3.11
+  against ~1.4s on 3.14; the baseline was never advanced, so a single mid-session `.py` commit made every
+  later Stop pay it, read-only turns included; and CI runs `--floor` unconditionally, which is a strict
+  superset of what the `*.py` gate ever triggered. **Nothing local runs the floor leg now** —
+  `scripts/check.sh --floor`, by hand, before changing anything the type system touches.
+- **`_lib.sh` → inlined into `confirm-live-run.sh`, its last real consumer.** It shared three helpers across
+  four scripts; `done-gate.sh` sourced it and used none of them. With one consumer left, a shared library is
+  indirection whose only remaining effect is a way for the guard to vanish — a failed `source` under
+  `set -uo pipefail` leaves every helper undefined and the script runs on to `exit 0`.
+
+Both surviving hooks were rewritten in that pass, then again after the review that followed it. What to know
+before editing them:
 
 - **`done-gate.sh` runs `check.sh` unconditionally.** It used to gate on a changed `*.py`, which skipped the
   suite on exactly the edits the toolchain tests exist to catch — a `pyproject.toml` that drops
-  `required-version`, or a stale count in this file. 1.7s is cheap enough not to need the cleverness.
+  `required-version`, or a stale count in this file. 2.4s is cheap enough not to need the cleverness.
+- **Two fail-open bugs there, and the first fix was itself wrong once.**
+  `cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0` sat directly beneath a comment explaining that failing open here
+  would be "allowing what it exists to deny". Changing it to `exit 1` changed nothing: **only exit 2 blocks a
+  Stop**, and every other non-zero status is a non-blocking error, so the turn still ended and `check.sh` still
+  never ran. Measured both times. It exits 2 now, and the payload is read *before* the `cd`, so that a failure
+  can reach `block` — without that, an unset `CLAUDE_PROJECT_DIR` would block forever with no strike counter to
+  stop it. The second bug was real from the start: a non-numeric strikes file was fatal in the worst direction,
+  because under `set -u` `$(( strikes + 1 ))` treats a non-numeric value as a *variable name*, so the shell died
+  on "unbound variable" **before** reaching `exit 2` and the hook returned 0. A `case` guard fixes it; dropping
+  `set -u` would not.
 - **The Stop gate stands down after three consecutive blocks.** Exit 2 on Stop forces the turn to continue, so
-  a failure no code change fixes — the floor leg needs the network — would otherwise loop forever.
-- **`protect-files.sh`'s Bash arm is a speed bump, not a boundary.** `E=.env; cat $E` defeats it. It exists for
-  the accidental `cat .env`, not for an adversary. An earlier version of this hook layer also tried to police
-  `ruff format` and the ty pin by matching shell strings; that was deleted rather than patched, because
-  `cat x && uvx ruff format .` walked straight through it and the guard read as protection it did not provide.
-- **`confirm-live-run.sh` is leaky too, and that is fine, because it asks rather than denies.** The distinction
-  is the whole reason it survived the deletion above: a missed case costs one unprompted run, not a false
-  belief that something is blocked. It normalises quotes and whitespace first — `uv run main.py`,
-  `uv run python -m main`, and `python "main.py"` were all bypasses in the first version. `M=main.py;
-  uv run python $M` still gets through, and no regex over a shell string will fix that.
+  a failure that no code change fixes — a wrong `CLAUDE_PROJECT_DIR`, a `uvx` cache that cannot reach the
+  network for the pinned ruff and ty — would otherwise loop forever. Know the cost: three consecutive *genuine*
+  failures stand the gate down too, and with `static-gate.sh` deleted a lint error no longer surfaces at the
+  edit that caused it. The stand-down message names the command to run, which is the only thing that says so.
+- **`confirm-live-run.sh` asks rather than denies, which is why it survived `8a2241c`** — the commit that
+  deleted two Bash guards outright. A missed case costs one unprompted run; a missed case in a *deny* reads as
+  protection it cannot provide. `M=main.py; uv run python $M` still gets through, and no regex over a shell
+  string will fix that.
+- **Every rule matches one command, because the string is split on separators first.** Ending a pattern at
+  `( |$)` is only correct once a segment cannot contain one. Measured against the version this replaces, which
+  matched the whole normalised string: `uv run python main.py; echo done`, `uv run python main.py;`,
+  `(uv run python main.py)`, `{ uv run python main.py; }` and `uv run python -m main; echo done` were all
+  allowed with no prompt, because `;` is neither a space nor end-of-string. Absolute paths were the other
+  hole — `([^ ]*/)?` now, not `(\./)?`, which admitted only a bare or `./`-prefixed name and so let the shape
+  most tooling actually emits walk straight through.
+- **A newline is split on as a separator, not collapsed into a space, and that is what keeps the rules out of
+  the allowlist business.** The alternative was tried and dropped: squeeze the newline away, then skip any
+  command whose first word is a reader so a doc grep does not ask. It works until the reader is on line 1 and
+  the live run is on line 2, and the repair for that is a list of command names that has to grow — `ls`,
+  `stat`, `find`, `xargs` and `git` were all missing from the seventeen it started with. Anchoring the
+  `streamlit run` rule at the *start* of a segment buys the same thing with no list:
+  `grep -rn "streamlit run" README.md` is a segment that *contains* `streamlit run` without starting with it.
+  Matching is `[[ =~ ]]` with the ERE in an unquoted variable — what bash 3.2 requires, and what
+  `/usr/bin/env bash` is on macOS.
+- **A missing `jq` makes it ask — not deny, and not allow.** `exit 2` there denied every Bash call, the
+  `brew install jq` in its own error message included, because the hook is registered on the whole `Bash`
+  matcher: an unrecoverable lockout. `exit 1` is non-blocking for `PreToolUse`, so it warns and allows, which
+  is the live run going through unprompted. An ask hook has to degrade to an ask, and the JSON is `printf`'d
+  because jq is precisely what is missing. The same branch covers jq being present and *failing*, which an
+  unchecked `cmd=$(jq ...)` under `set -uo pipefail` had turned into a silent `exit 0`.
 
 ## Architecture
 
@@ -380,7 +438,7 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   suite otherwise becomes a **root** run, and LangSmith bills per trace rather
   than per span — so 17 one-span traces per run cost what 17 whole agent conversations would, while a live
   turn nests all its subagent and tool spans inside a single trace for free. `done-gate.sh` runs the suite
-  every turn and the floor leg runs it twice, which is how a free tier goes in a few hundred turns. Two things
+  every turn, and `--floor` doubles that, which is how a free tier goes in a few hundred turns. Two things
   hold it up and both are easy to undo: pytest imports `conftest.py` before any test module, so it beats the
   first `import real_estate_agent.config`; and `load_dotenv()` defaults to `override=False`, so an
   already-set variable wins — passing `override=True` there re-enables tracing everywhere at once.

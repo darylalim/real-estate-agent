@@ -1,39 +1,66 @@
 #!/usr/bin/env bash
-# Stop — the definition of done, once per turn. There is no CI here, so this and
-# scripts/check.sh are the only things that run it.
+# Stop — the definition of done, once per turn.
 #
-# Gating history worth keeping: this used to run only when `git status` showed a
-# changed *.py, which skipped the suite on exactly the edits its toolchain tests
-# exist to catch -- a pyproject.toml that drops `required-version`, or a
-# CLAUDE.md whose test count has gone stale. check.sh is 1.7s, so it now runs
-# unconditionally and that whole class of gap is gone. Only the 7s floor leg is
-# gated, on Python, which is what the floor leg is actually about.
+# This is the local half of a two-machine arrangement, and it is deliberately
+# the cheap half. `.github/workflows/check.yml` runs `scripts/check.sh --floor`
+# on every push and PR, on Linux, on a clean checkout, with `uv sync --locked`.
+# What this buys that CI cannot is timing: a commit message asserting "N tests,
+# ty clean, ruff clean" is true when it is written, not several minutes later.
+#
+# Two pieces of gating history worth keeping:
+#
+# 1. This used to run only when `git status` showed a changed *.py, which
+#    skipped the suite on exactly the edits its toolchain tests exist to catch
+#    -- a pyproject.toml that drops `required-version`, or a CLAUDE.md whose
+#    test count has gone stale. check.sh is 2.4s, so it runs unconditionally.
+#
+# 2. It used to also run the 3.11 floor leg, gated on a changed *.py against a
+#    baseline commit written by a SessionStart hook. That leg was removed on
+#    2026-08-25 and session-start.sh deleted with it. Three measured reasons:
+#    the leg costs ~27s warm and ~37s cold, not the 7s this header used to claim
+#    (`--isolated` rebuilds the environment every run, and the suite is ~22s on
+#    3.11 against ~1.4s on 3.14); the baseline was never advanced, so one
+#    mid-session .py commit made every remaining Stop pay it, read-only turns
+#    included; and CI runs --floor unconditionally, which is a strict superset of
+#    what the *.py gate ever triggered. Run `scripts/check.sh --floor` by hand
+#    before changing anything the type system touches.
+#
+# **Only exit 2 blocks a Stop.** Every other non-zero status is a non-blocking
+# error: Claude Code prints it and lets the turn end anyway. That is the whole
+# reason the payload is read before the `cd` below rather than after -- a failure
+# has to be able to reach `block`, and `block` needs the session id to find its
+# strike file.
 set -uo pipefail
-# Sourcing must be fatal: without `set -e`, a failed source leaves every helper
-# undefined and the hook runs on to `exit 0` -- allowing what it exists to deny.
-# shellcheck source=/dev/null
-. "${BASH_SOURCE[0]%/*}/_lib.sh" || { printf '%s: cannot source _lib.sh\n' "${0##*/}" >&2; exit 1; }
-cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 
 payload=$(cat)
 session=$(printf '%s' "$payload" | jq -r '.session_id // "unknown"' 2>/dev/null || echo unknown)
 strikes_file="${TMPDIR:-/tmp}/rea-hook-strikes-${session}"
-baseline_file="${TMPDIR:-/tmp}/rea-hook-baseline-${session}"
 
 # A Stop hook that exits 2 forces the turn to continue. If the failure is one no
-# code change fixes -- the floor leg needs the network to resolve 59 packages,
-# and a cold run downloads a CPython too -- blocking forever is worse than
-# reporting. Three strikes, then hand it to the human and let the turn end.
+# code change fixes -- an unset or wrong CLAUDE_PROJECT_DIR, a uvx cache that
+# cannot reach the network to fetch the pinned ruff and ty -- blocking forever is
+# worse than reporting. Three strikes, then hand it to the human and let the turn
+# end. Note what this costs: three consecutive *genuine* failures also stand the
+# gate down, and since static-gate.sh was deleted a lint error no longer surfaces
+# at the edit that caused it. The stand-down message is the only thing that says
+# so, which is why it names the command to run.
 strikes=$(cat "$strikes_file" 2>/dev/null || echo 0)
+# Non-numeric content here used to be fatal in the worst direction: `strikes=$((
+# strikes + 1 ))` under `set -u` treats a non-numeric value as a variable name,
+# so the shell died with "unbound variable" *before* reaching `exit 2` and the
+# hook returned 0 -- a failing definition-of-done silently allowing the turn to
+# end. Reproduced, then fixed here rather than by dropping `set -u`.
+case $strikes in '' | *[!0-9]*) strikes=0 ;; esac
 
+# block <headline> <detail> <what to run>
 block() {
   strikes=$((strikes + 1))
   printf '%s' "$strikes" > "$strikes_file"
   if [ "$strikes" -ge 3 ]; then
     rm -f "$strikes_file"
-    # Deliberately no hook_require_jq in this script: exiting early on a missing
-    # jq would skip the gate, which is worse than losing the pretty message.
-    stand_down="$1 — blocked 3 times without clearing, so the gate is standing down. Run scripts/check.sh --floor yourself."
+    # Deliberately no jq prerequisite check in this script: exiting early on a
+    # missing jq would skip the gate, which is worse than losing the message.
+    stand_down="$1 — blocked 3 times without clearing, so the gate is standing down. $3"
     if command -v jq >/dev/null 2>&1; then
       jq -n --arg m "$stand_down" '{systemMessage:$m}'
     else
@@ -45,23 +72,20 @@ block() {
   exit 2
 }
 
+# Fail closed, and closed means *2*. The version this replaces exited 1 under a
+# comment explaining that failing open here would be "allowing what it exists to
+# deny" -- but 1 is non-blocking, so the turn ended, check.sh never ran, and the
+# gate was still silently removed. Measured: `CLAUDE_PROJECT_DIR=/nonexistent`
+# gave exit 1 and a stderr line nobody was required to act on.
+cd "${CLAUDE_PROJECT_DIR:-.}" || block \
+  "The done gate cannot run: cannot cd to CLAUDE_PROJECT_DIR (${CLAUDE_PROJECT_DIR:-.})." \
+  "" \
+  "Set CLAUDE_PROJECT_DIR, or run scripts/check.sh from the repo root yourself."
+
 if ! out=$(./scripts/check.sh 2>&1); then
-  block 'The definition of done does not hold: "N tests, ty clean, ruff clean".' "$out"
-fi
-
-# The floor leg, when Python changed -- in the working tree, or in a commit made
-# since the session began. Committing inside a turn used to leave a clean tree
-# and skip this entirely.
-baseline=$(cat "$baseline_file" 2>/dev/null || true)
-changed=$(git status --porcelain -- '*.py' 2>/dev/null)
-if [ -z "$changed" ] && [ -n "$baseline" ]; then
-  changed=$(git diff --name-only "$baseline" HEAD -- '*.py' 2>/dev/null || true)
-fi
-
-if [ -n "$changed" ]; then
-  if ! floor=$(uv run --python 3.11 --isolated pytest tests/ -q 2>&1); then
-    block 'The 3.11 floor leg failed — the code no longer honours requires-python = ">=3.11". Narrowing requires-python is usually the honest fix, not deleting the leg.' "$floor"
-  fi
+  block 'The definition of done does not hold: "N tests, ty clean, ruff clean".' \
+    "$out" \
+    "Run scripts/check.sh yourself."
 fi
 
 rm -f "$strikes_file"
