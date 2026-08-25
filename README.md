@@ -252,6 +252,13 @@ calls the script rather than restating the tools, which is the point of having
 the script: one place decides what "done" means. No secrets — the suite is
 entirely offline.
 
+A second job releases. When `version` in `pyproject.toml` names a tag that does
+not exist yet, a push to `main` that passes the checks tags that commit and
+publishes a GitHub release, with notes built from the commit subjects since the
+previous tag. It is gated on `needs: check`,
+so a release is never cut from a red commit, and it is the only job holding a
+writable token — `check` stays read-only.
+
 ### Why "offline" is enforced rather than asserted
 
 That claim used to be false, and how it failed is worth keeping in view.

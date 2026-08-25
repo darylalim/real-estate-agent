@@ -1490,7 +1490,37 @@ def test_check_script_pins_match_the_docs() -> None:
         )
 
 
-_RUN_STEP = re.compile(r"^\s*run:\s*(.+?)\s*$", re.MULTILINE)
+_RUN_STEP = re.compile(r"^(?P<indent>\s*)(?:-\s+)?run:[ \t]*(?P<value>.*)$")
+
+
+def _ci_commands(workflow: str) -> list[str]:
+    """Every shell command a workflow's ``run:`` steps execute.
+
+    Block scalars are followed into their bodies. A scanner that reads only the
+    ``run:`` line captures the literal ``|`` and never sees what runs beneath
+    it -- measured -- which is precisely where an inlined ``uvx ruff check .``
+    would sit unnoticed. It also accepts the ``- run: cmd`` one-liner, which the
+    line-anchored version silently returned nothing for.
+    """
+    commands: list[str] = []
+    lines = workflow.splitlines()
+    for index, line in enumerate(lines):
+        match = _RUN_STEP.match(line)
+        if match is None:
+            continue
+        value = match["value"]
+        if not value.startswith(("|", ">")):
+            commands.append(value.strip())
+            continue
+        # Body lines are those indented past the `run:` key itself.
+        key = line.index("run:")
+        for body in lines[index + 1 :]:
+            if not body.strip():
+                continue
+            if len(body) - len(body.lstrip()) <= key:
+                break
+            commands.append(body.strip())
+    return commands
 
 
 def test_ci_calls_the_check_script_rather_than_restating_it() -> None:
@@ -1506,7 +1536,7 @@ def test_ci_calls_the_check_script_rather_than_restating_it() -> None:
     written in the comments and would otherwise match.
     """
     workflow = PROJECT_ROOT / ".github" / "workflows" / "check.yml"
-    commands = _RUN_STEP.findall(workflow.read_text(encoding="utf-8"))
+    commands = _ci_commands(workflow.read_text(encoding="utf-8"))
 
     assert "scripts/check.sh --floor" in commands, (
         "CI must run the script, with the floor leg -- that is the whole point"

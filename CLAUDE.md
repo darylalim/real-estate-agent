@@ -133,8 +133,13 @@ which makes the next `--lf` collect only it. That is a red `--lf` no code change
 
 ## CI
 
-`.github/workflows/check.yml`, one job on `ubuntu-latest`, triggered by push to `main`, any PR, and
-`workflow_dispatch`. It **calls `scripts/check.sh --floor`** rather than re-listing ruff, ty and pytest as
+`.github/workflows/check.yml`, two jobs on `ubuntu-latest`, triggered by push to `main` and any PR.
+`workflow_dispatch` and a workflow-level `concurrency` block were both cut on 2026-08-25 as non-essential:
+everything the workflow runs is pinned, so there is no upstream drift for a manual trigger to catch that
+"Re-run all jobs" does not already cover, and Actions minutes are free on a public repo, so
+`cancel-in-progress` was optimising a cost of zero while manufacturing cancelled runs in the history.
+
+The **`check`** job **calls `scripts/check.sh --floor`** rather than re-listing ruff, ty and pytest as
 YAML steps — spelling them out would make the workflow a fourth home for the pins, and the one home
 `test_check_script_pins_match_the_docs` does not read. Change what CI runs by changing the script.
 
@@ -149,13 +154,55 @@ Three things it buys that nothing else here does:
 gated there once and is now gone from the hook entirely — and running it somewhere is most of the reason to
 have a second machine.
 
-No secrets, by construction. The suite is offline and the one test that builds the real graph injects its own
-dummy `ANTHROPIC_API_KEY`, so `permissions: contents: read` is enough — don't add a key to make some future
-live test possible without re-reading that decision. A side effect worth knowing: because a clean checkout has
+The **`release`** job tags and publishes when `version` in `pyproject.toml` names a tag that does not exist
+yet. Five decisions not worth re-litigating:
+
+- **Detection is "does `v$VERSION` exist?", not a diff against `HEAD~1`.** Only the former is idempotent — a
+  re-run, a force-push and a squash merge each break the diff, and none of them break this.
+- **It lives in `check.yml` rather than its own file, for `needs: check` alone.** That is the only way to
+  guarantee a release is never cut from a red commit; a separate workflow would have to re-run `check.sh`
+  itself or reach for `workflow_run`. The cost is that
+  `test_ci_calls_the_check_script_rather_than_restating_it` scans this job's `run:` lines too — `gh release
+  create` is fine, anything containing `uvx`, `pytest`, `ruff` or `ty@` is not.
+- **`concurrency` is set on this job even though it was cut at the workflow level.** Different reason, so it
+  survived: two pushes to `main` in quick succession — a bump, then a docs fixup — otherwise race. Both read
+  the tag as absent, the first creates it, and the second fails and reddens `main`. `cancel-in-progress:
+  false` queues the second so it sees the tag and skips, which is the correct outcome rather than a
+  suppressed error.
+- **The version is read with `tomllib`, not a `grep` for `version = `.** `pyproject.toml` has several tables
+  and a regex will happily read a version out of the wrong one. `ubuntu-latest` ships Python 3.12, so this
+  needs no setup step — and uv is deliberately absent from a job with nothing to build.
+- **Notes are built from commit subjects, not `--generate-notes`.** GitHub's generator is **PR-based**, and
+  this repo has none — measured on the real v0.1.0 release, 39 direct-to-`main` commits produced a body of
+  exactly one line, the Full Changelog link. The subjects here are the best release-note material in the
+  repo. Two details carry weight: `--sort=-version:refname` is version-aware where a lexicographic sort is
+  not (measured over `v0.2.0`/`v0.9.0`/`v0.10.0` — this picks `v0.10.0`, `sort -r` picks `v0.9.0`, and the
+  notes would then silently restate several releases), and the checkout needs `fetch-depth: 0` because the
+  default depth-1 clone has neither history nor tags. The tag reaches the script through `env:` rather than
+  `${{ }}` interpolated into the body, which is the standard Actions injection seam and this value comes
+  from a file.
+
+**`permissions` are per job now, and that split is the whole security story.** `check` stays
+`contents: read`; `release` alone holds `contents: write`. No secret was added — `github.token` is minted per
+run and expires with it — but "no secrets, by construction" is no longer the same sentence as "nothing here
+can write". The suite is still offline and the one test that builds the real graph injects its own dummy
+`ANTHROPIC_API_KEY`, so don't add a key to make some future live test possible without re-reading that
+decision. A side effect worth knowing: because a clean checkout has
 no `.env`, CI never emitted a LangSmith trace even while every local run was emitting 17. The whole spend was
 on this laptop, via the Stop hook, which is also why nothing in the workflow logs pointed at it — and why the
 first guard against it passed here while proving nothing. Actions are pinned by commit sha with the tag in a
 trailing comment; bump both halves together.
+
+**The workflow's own guard reads block scalars now, and did not before.**
+`test_ci_calls_the_check_script_rather_than_restating_it` scanned `^\s*run:\s*(.+?)\s*$` over the file,
+which captures the literal `|` off a `run: |` line and never descends into the body underneath it. Measured
+against the release job's first block scalar: the old regex returned
+`['uv sync --locked', 'scripts/check.sh --floor', '|', '>-']`, and an `uvx ruff@0.16.1 check .` planted three
+lines into a block passed it. The same anchor also missed the ordinary `- run: cmd` one-liner entirely,
+returning `[]` — loudly, since the two `in commands` assertions fire before the scan loop, but it is why the
+two `run:` steps keep a `name:` that merely restates the command. `_ci_commands` follows a `|` or `>` into
+every line indented past the `run:` key. Same family as the `ast` lesson below: a guard anchored on how
+something is *spelled* stops seeing it the moment it is spelled differently.
 
 ## The hooks in `.claude/`
 

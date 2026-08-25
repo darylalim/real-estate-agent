@@ -1,32 +1,21 @@
-# The definition of done, on a machine that is not yours.
+# The definition of done, on a machine that is not yours: Linux, clean checkout,
+# and none of the `.claude/` hooks a clone does not inherit.
 #
-# This job calls `scripts/check.sh` instead of re-listing ruff, ty and pytest as
-# YAML steps. That is deliberate: the script is where the pins are enforced
-# rather than described, and its own header already names CI as a caller.
-# Spelling the tools out here would make this a fourth place the versions live —
-# one that `test_check_script_pins_match_the_docs` does not read and therefore
-# cannot stop drifting.
-#
-# What CI adds over the `.claude/` hooks: those are one machine's convenience
-# and a clone without Claude Code inherits none of them. This runs on a clean
-# checkout, on Linux, on every push and PR.
+# It calls `scripts/check.sh` rather than re-listing ruff, ty and pytest as YAML
+# steps. Spelling them out would make this a fourth home for the pins, and the
+# one `test_check_script_pins_match_the_docs` does not read.
+# `test_ci_calls_the_check_script_rather_than_restating_it` fails if it drifts.
 name: check
 
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
 
-# Read-only, and no secrets: the suite is entirely offline. The one test that
-# builds the real graph (`test_agent_exposes_planning_and_delegation`) injects a
-# dummy ANTHROPIC_API_KEY itself, so there is nothing here worth stealing.
+# Read-only, and no secrets: the suite is offline and the one test that builds
+# the real graph injects a dummy ANTHROPIC_API_KEY itself.
 permissions:
   contents: read
-
-concurrency:
-  group: check-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   check:
@@ -37,13 +26,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Actions are pinned by commit sha, not by tag: a tag is mutable and these
-      # run with a token in scope. The trailing comment is the human-readable
-      # half — keep them in step when bumping.
+      # run with a token in scope. Bump both halves together.
       #
       # No actions/setup-python. uv reads .python-version and fetches 3.14
-      # itself, exactly as it does locally, and it is also what fetches 3.11 for
-      # the floor leg below. Two ways to acquire an interpreter is one too many,
-      # and the second one would not be the way anybody actually runs this.
+      # itself, and is also what fetches 3.11 for the floor leg. The cache is
+      # what stops `uvx ruff`, `uvx ty` and that rebuilt 3.11 environment
+      # re-downloading on every run.
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -51,15 +39,109 @@ jobs:
 
       # --locked fails rather than quietly re-resolving, which makes this the
       # only check anywhere that uv.lock is still current with pyproject.toml.
-      # `uv run` inside check.sh would sync too, but silently and without that
-      # guarantee.
+      # `uv run` inside check.sh syncs too, but silently.
       - name: Sync
         run: uv sync --locked
 
-      # --floor adds the `requires-python = ">=3.11"` leg. Locally that is
-      # opt-in because it costs a resolve; here it is most of the point of
-      # having a second machine at all. check.sh accumulates a status instead of
-      # exiting early, so a failing run reports every broken leg, not just the
-      # first.
+      # --floor adds the requires-python = ">=3.11" leg, which nothing local
+      # runs. check.sh accumulates a status rather than exiting early, so a red
+      # run reports every broken leg and not just the first.
       - name: scripts/check.sh --floor
         run: scripts/check.sh --floor
+
+  # Tag and publish when `version` in pyproject.toml names a tag that does not
+  # exist yet. Detection is "is there a v$VERSION tag?" rather than a diff
+  # against HEAD~1, because only the former is idempotent: a re-run, a
+  # force-push and a squash merge all break the diff and none of them break
+  # this.
+  #
+  # `needs: check` is the whole reason this lives in this file rather than its
+  # own -- it is the only way to guarantee a release is never cut from a red
+  # commit. A separate workflow would have to re-run check.sh or reach for
+  # `workflow_run`.
+  release:
+    needs: check
+    # Belt and braces. The `on:` filter already restricts push to main, so the
+    # event test alone is sufficient today -- the ref test is what keeps this
+    # correct if a second branch is ever added up there. It guards the only
+    # irreversible step in the repo.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # Scoped to this job on purpose: `check` above stays read-only. This is the
+    # only place in the repo holding a writable token, and it is still not a
+    # secret anyone added -- github.token is minted per run and expires with it.
+    permissions:
+      contents: write
+
+    # Serialised, and NOT cancelled in flight. Two pushes to main in quick
+    # succession -- a bump, then a docs fixup -- otherwise race: both read the
+    # tag as absent, the first creates it, the second fails and reddens main.
+    # Queueing makes the second see the tag and skip, which is the correct
+    # outcome rather than a suppressed error.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+
+    steps:
+      # fetch-depth: 0 because the notes below walk history and need the tags.
+      # The default depth-1 checkout has neither. 39 commits, so the cost is
+      # noise; revisit if this repo ever gets long enough for it not to be.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      # tomllib rather than a grep for `version = `: pyproject.toml has other
+      # tables and a regex would happily read a version out of one of them.
+      # ubuntu-latest ships Python 3.12, so this needs no setup step -- and uv
+      # is deliberately absent from this job, which has nothing to build.
+      - name: Read the declared version
+        id: version
+        run: |
+          version=$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')
+          tag="v$version"
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag already exists -- nothing to release."
+            echo "bumped=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "$tag is new -- releasing."
+            echo "bumped=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      # Notes are built from commit subjects rather than --generate-notes.
+      # GitHub's generator is PR-based, and measured on the real v0.1.0 release
+      # this repo produced a body of exactly one line -- the Full Changelog
+      # link -- because all 39 commits went direct to main with no PR to group.
+      # The subjects are the best release-note material here, so they are what
+      # goes in.
+      #
+      # --sort=-version:refname is version-aware where a lexicographic sort is
+      # not. Measured over v0.2.0 / v0.9.0 / v0.10.0: this picks v0.10.0 and
+      # `sort -r` picks v0.9.0, which would silently restate several releases'
+      # worth of commits in the notes.
+      #
+      # The tag reaches the script through env: rather than being interpolated
+      # into the body. `${{ }}` expanded inside a run: block is the standard
+      # Actions injection seam, and this value comes from a file.
+      #
+      # gh creates the tag as a side effect of the release. --target pins it to
+      # the exact commit that just went green, not to whatever main points at
+      # by the time this runs.
+      - name: Tag and publish
+        if: steps.version.outputs.bumped == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+          previous=$(git tag --sort=-version:refname | head -1)
+          git log --reverse --no-merges --format='- %s' "${previous:+$previous..}$GITHUB_SHA" >"$notes"
+          if [ -n "$previous" ]; then
+            printf '\n**Full Changelog**: %s/%s/compare/%s...%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$previous" "$TAG" >>"$notes"
+          else
+            printf '\n**Full Changelog**: %s/%s/commits/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$TAG" >>"$notes"
+          fi
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file "$notes"
