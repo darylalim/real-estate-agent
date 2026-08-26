@@ -49,8 +49,10 @@ SKILLS_DIR = PROJECT_ROOT / "skills"
 # holds the full transcript, which is the last thing to commit by accident.
 CHECKPOINT_DB = WORKSPACE_DIR / "checkpoints.db"
 
-# LangChain resolves "provider:model" strings through init_chat_model, so the
-# prefix is required — a bare "claude-opus-5" will not resolve.
+# LangChain resolves "provider:model" strings through init_chat_model. The
+# prefix is this repo's convention, not a hard requirement — init_chat_model
+# infers "anthropic" from any "claude-*" name, so a bare "claude-opus-5" does
+# resolve. Keep it: require_api_key() derives which key to demand from it.
 DEFAULT_MODEL = os.getenv("REA_MODEL", "anthropic:claude-opus-5")
 
 # Subagents inherit the orchestrator's model unless overridden. Kept separate

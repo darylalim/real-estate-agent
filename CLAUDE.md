@@ -60,15 +60,18 @@ set — verified against 0.15.0. ty has no such setting, so its pin holds only f
 `scripts/check.sh`; `uvx ty check` typed directly still resolves whatever is newest. That is a real gap, just
 a narrower one than before, and `test_check_script_pins_match_the_docs` at least stops the script and the docs
 disagreeing. CI now runs the same script on every push and PR, so the pin holds off this machine too — see
-below. Bump a pin deliberately, don't drop it. `pytest` is the only dev dependency, and `.gitignore` already
-ignores `.ruff_cache/` and `.ty_cache/`.
+below. Bump a pin deliberately, don't drop it. The dev dependencies are `pytest` and `langsmith`, and the second is
+not optional decoration — `tests/` imports `tracing_is_enabled` from it at module scope, so removing it breaks
+collection rather than one test. `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
 
-**`ruff check` yes, `ruff format` no.** The formatter would rewrite 7 of the 14 Python files — line-wrapping
+**`ruff check` yes, `ruff format` no.** The formatter would rewrite 10 of the 23 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
-reports a total of 19, not 14: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
-this file, and the three `SKILL.md` files are in its denominator. All 7 rewrites are `.py`.) A consequence
-worth knowing: blank-line and whitespace structure has no gate at all, since `E3` is preview-only in 0.16.1
-and the formatter is the only other thing that would catch it.
+reports a total of 28, not 23: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
+this file, and the three `SKILL.md` files are in its denominator. All 10 rewrites are `.py`.) Both counts
+are measurements rather than constants — they read 7-of-14 and 19 when first written, and drifted in
+silence as the repo grew, so re-derive them instead of trusting them. A consequence worth knowing:
+blank-line and whitespace structure has no gate at all, since `E3` is preview-only in 0.16.1 and the
+formatter is the only other thing that would catch it.
 
 **The rule set is `extend-select`, not `select`.** Replacing the defaults outright looks like it protects
 against them widening across releases, but `required-version` already fixes which defaults apply, so the
@@ -77,7 +80,10 @@ replacement bought nothing and silently dropped ~300 rules the codebase already 
 function-scoped imports in `tests/` exist so `monkeypatch` can reach module globals. **That is false** — the
 test module already imports `real_estate_agent.tools.comms` at module scope, so the module object is in
 `sys.modules` regardless, and `monkeypatch.setattr` rebinds the same global either way. Those imports can be
-hoisted; only `documents.py`'s lazy `pypdf` and `__init__.py`'s lazy `build_agent` are deliberate.
+hoisted. Three lazy imports elsewhere are deliberate: `documents.py`'s `pypdf`, `__init__.py`'s `build_agent`,
+and `main.py`'s package imports inside `main()` — the last not merely deliberate but pinned by
+`test_each_entry_point_loads_dotenv_before_the_package`, so hoisting it fails the suite. See the `.env`
+invariant below for why.
 
 **Run the 3.11 leg before changing anything the type system touches.** `.python-version` pins development to
 3.14, so without it the `requires-python = ">=3.11"` floor is never executed on any machine — the promise
@@ -268,10 +274,11 @@ before editing them:
   network for the pinned ruff and ty — would otherwise loop forever. Know the cost: three consecutive *genuine*
   failures stand the gate down too, and with `static-gate.sh` deleted a lint error no longer surfaces at the
   edit that caused it. The stand-down message names the command to run, which is the only thing that says so.
-- **`confirm-live-run.sh` asks rather than denies, which is why it survived `8a2241c`** — the commit that
-  deleted two Bash guards outright. A missed case costs one unprompted run; a missed case in a *deny* reads as
-  protection it cannot provide. `M=main.py; uv run python $M` still gets through, and no regex over a shell
-  string will fix that.
+- **`confirm-live-run.sh` asks rather than denies, which is why `3b5aef8` restored it.** `8a2241c` deleted it
+  outright alongside `toolchain-guard.sh` — both Bash guards — and only this one came back, on that reasoning.
+  (The script's own header still says it *survived* `8a2241c`; it did not.) A missed case costs one
+  unprompted run; a missed case in a *deny* reads as protection it cannot provide. `M=main.py; uv run
+  python $M` still gets through, and no regex over a shell string will fix that.
 - **Every rule matches one command, because the string is split on separators first.** Ending a pattern at
   `( |$)` is only correct once a segment cannot contain one. Measured against the version this replaces, which
   matched the whole normalised string: `uv run python main.py; echo done`, `uv run python main.py;`,
@@ -450,7 +457,9 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
 
 ## Invariants that fail silently
 
-Each of these is load-bearing and has a test. Breaking one produces plausible-looking wrong output, not an error.
+Each of these is load-bearing, and breaking one produces plausible-looking wrong output rather than an error.
+Most name the test that pins them. Three do not, and say so in place: the model-prefix bullet, `save_draft` as
+the sole draft path, and the always-rerun rule are held up by prose and prompt surface alone.
 
 - **Permission rules are order-sensitive: first match wins, and an unmatched path defaults to *allow*.** The
   allows in `WORKSPACE_PERMISSIONS` must precede the catch-all write deny. `test_permission_matrix` imports the
@@ -460,11 +469,18 @@ Each of these is load-bearing and has a test. Breaking one produces plausible-lo
   changing the model string. `agent.py` pins `TodoListMiddleware()` explicitly. Re-verify on a version bump
   by building the graph both ways and diffing the tool list — `create_deep_agent(...)` with and without
   `middleware=[TodoListMiddleware()]`; on 0.7.8 `write_todos` appears only in the pinned build. Note what
-  `test_agent_exposes_planning_and_delegation` cannot tell you: it collects names into a **set**, so if a
-  future release starts adding the middleware itself, the resulting duplicate registration is invisible to
-  it and surfaces only as an API error on a live run.
-- **Models need the LangChain `provider:model` prefix.** A bare `claude-opus-5` will not resolve.
-  `require_api_key()` derives which key to demand from that prefix.
+  `test_agent_exposes_planning_and_delegation` cannot tell you: it collects names into a **set**, so a
+  duplicate registration is invisible to it. That case has its own test —
+  `test_planning_middleware_is_pinned_because_it_is_not_automatic` builds the graph both ways and goes red
+  if deepagents ever starts adding the middleware itself. So the both-ways diff described above is what the
+  suite already runs every time, not a chore to remember on a version bump.
+- **Models carry the LangChain `provider:model` prefix, and `require_api_key()` reads it.** The prefix is this
+  repo's convention, not a hard requirement, and an earlier version of this line said otherwise. Measured:
+  `init_chat_model` infers `anthropic` from any `claude-*` name, so a bare `claude-opus-5` **does** resolve and
+  `build_agent` returns an identical ten-tool graph either way. It is genuinely required only for names
+  langchain cannot infer. Keep the prefix regardless — `require_api_key()` derives which key to demand from it
+  and falls back to `"anthropic"` when there is no `:`. Nothing tests any of this, and `config.py` carried the
+  same wrong claim in a comment until it was corrected alongside this line.
 - **`.env` is loaded by the entry points, never at package import.** `config.py` used to call `load_dotenv()`
   at module scope, which meant importing the package applied a developer's personal configuration to every
   consumer — the test suite included. Three variables leaked and each fails differently: `LANGSMITH_TRACING`
@@ -581,12 +597,22 @@ Both fail-closed gate tests read the tree now, through one shared `_sole_guard(s
 the single `if` under `scope` whose condition mentions every one of `words`, matching on *identifiers* rather
 than a rendered string so reformatting the condition is not a change in what it guards. Converting the CLI's
 `test_resuming_a_pending_approval_without_the_flag_refuses` turned up a second gap on its own — see the
-ordering note below. `test_resume_payload_is_a_mapping_not_a_list` is still a text assertion; it checks for a
-literal in a function rather than a statement's position, which is the case text handles fine.
+ordering note above, in the `_pending_approvals` bullet. `test_resume_payload_is_a_mapping_not_a_list` is
+still a text assertion; it checks for a literal in a function rather than a statement's position, which is
+the case text handles fine.
 - **Tests monkeypatch module-level constants** (`comms.DRAFTS_DIR`, `documents.DOCUMENTS_DIR`). Those names must
   stay module globals resolved at call time — rebinding them into defaults or a local alias breaks the patching.
 - **`save_draft` is the only sanctioned way to produce a draft.** Adding a second path (e.g. `write_file`) was a
-  real defect: the reviewer got two divergent copies of one email.
+  real defect: the reviewer got two divergent copies of one email. **No test holds this** — enforcement is the
+  `save_draft` docstring in `comms.py` and the liaison prompt in `subagents.py`, both model-facing prose, and
+  `WORKSPACE_PERMISSIONS` structurally *allows* a `write_file` into `/workspace/drafts/`. Shortening either
+  string is a behaviour change with a green suite.
+- **Two constants are shared across files by hand, and neither pairing has a test.** The three skill paths in
+  `subagents.py` are string literals (`/skills/cma-analysis`, …) with nothing tying them to the directories in
+  `skills/` — `SKILLS_DIR` in `config.py` is dead code, and `test_subagents_carry_their_own_skills` compares
+  the literal against itself, so renaming a skill directory leaves the suite green and the specialist running
+  with no methodology. Likewise `_HOA_CAPITALISATION = 100` in `comms.py` restates the `~100×` factor in
+  `skills/cma-analysis/SKILL.md`; change one and the same fee is worth two amounts on one screen.
 - **`ui.agent_session.message_key` and `main._message_key` must stay identical.** Both dedupe a
   `stream_mode="values"` stream, and both read the same checkpoint database — so a thread started in the CLI
   and reopened in the browser reprints its entire history if they drift.
