@@ -8,11 +8,12 @@
 # is the last point a hook sees -- the first prompt typed into the Chat page is
 # what actually bills, and no hook is in the loop by then.
 #
-# This asks rather than denies, which is why it survived the purge in 8a2241c
-# that deleted two Bash guards outright: a leaky "ask" costs a keystroke, a leaky
-# "deny" reads as protection it cannot provide. `M=main.py; uv run python $M`
-# still gets through, and that is an accepted limit of matching shell strings,
-# not an oversight.
+# This asks rather than denies, which is why 3b5aef8 restored it. 8a2241c
+# deleted it outright alongside toolchain-guard.sh -- both Bash guards -- and
+# only this one came back, on that reasoning: a leaky "ask" costs a keystroke,
+# a leaky "deny" reads as protection it cannot provide. `M=main.py; uv run
+# python $M` still gets through, and that is an accepted limit of matching
+# shell strings, not an oversight.
 #
 # **Every rule below matches one command, not the whole string.** The version
 # this replaces matched the whole normalised string, and ending a pattern at

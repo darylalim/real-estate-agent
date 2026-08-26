@@ -275,10 +275,10 @@ before editing them:
   failures stand the gate down too, and with `static-gate.sh` deleted a lint error no longer surfaces at the
   edit that caused it. The stand-down message names the command to run, which is the only thing that says so.
 - **`confirm-live-run.sh` asks rather than denies, which is why `3b5aef8` restored it.** `8a2241c` deleted it
-  outright alongside `toolchain-guard.sh` — both Bash guards — and only this one came back, on that reasoning.
-  (The script's own header still says it *survived* `8a2241c`; it did not.) A missed case costs one
-  unprompted run; a missed case in a *deny* reads as protection it cannot provide. `M=main.py; uv run
-  python $M` still gets through, and no regex over a shell string will fix that.
+  outright alongside `toolchain-guard.sh` — both Bash guards — and only this one came back, on that
+  reasoning; the script's own header says the same, having carried the wrong version of it until now.
+  A missed case costs one unprompted run; a missed case in a *deny* reads as protection it cannot provide.
+  `M=main.py; uv run python $M` still gets through, and no regex over a shell string will fix that.
 - **Every rule matches one command, because the string is split on separators first.** Ending a pattern at
   `( |$)` is only correct once a segment cannot contain one. Measured against the version this replaces, which
   matched the whole normalised string: `uv run python main.py; echo done`, `uv run python main.py;`,
@@ -652,11 +652,13 @@ the case text handles fine.
   turn writes anything, so a conditional re-run left the answer citing a CMA by path while the sidebar still
   said "Nothing written yet". The cost is one repaint of content re-read from the checkpoint.
 
-**The Streamlit lesson behind all five:** widget state is keyed and lifecycle-bound. If a keyed widget does
-not render on a run its value is discarded; if it does render with the same key, the *stored* value wins over
-the `value=`/`default=` you passed. Neither is an error. Prefer stateless elements for anything you are only
-displaying, render anything load-bearing before the first `st.rerun()`, and give a widget a key that changes
-when the thing it is asking about changes.
+**The Streamlit lesson behind the widget bullets above:** widget state is keyed and lifecycle-bound. If a
+keyed widget does not render on a run its value is discarded; if it does render with the same key, the
+*stored* value wins over the `value=`/`default=` you passed. Neither is an error. Prefer stateless elements
+for anything you are only displaying, render anything load-bearing before the first `st.rerun()`, and give a
+widget a key that changes when the thing it is asking about changes. (No count here on purpose, same as
+above: this line read "all three" when `edbfad5` wrote it and had already been bumped once by the time
+anyone noticed.)
 
 ## Conventions
 
