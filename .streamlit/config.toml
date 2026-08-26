@@ -9,15 +9,9 @@
 # regression the template does not intend, so the light half is authored here
 # from the same slate/blue family.
 #
-# Colour is per-mode; everything else is shared, with two exceptions Streamlit
+# Colour is per-mode; everything else is shared, with one exception Streamlit
 # imposes and one it does not:
 #
-#   - `chartCategoricalColors` is registered at `[theme]` only. Declaring it
-#     under `[theme.light]` / `[theme.dark]` is not an error, it is a *discard*:
-#     Streamlit logs "not a valid config option" to stderr, `st.get_option`
-#     raises, and the charts silently fall back to the built-in palette. So the
-#     chart palette cannot differ between modes, and the one below is chosen to
-#     work on both backgrounds — see its comment.
 #   - Heading sizes and weights set in `[theme]` are **not** inherited by the
 #     sidebar (Streamlit's own option description says so). `[theme.sidebar]`
 #     below therefore restates them rather than relying on the top block.
@@ -45,8 +39,20 @@ showWidgetBorder = true
 showSidebarBorder = true
 linkUnderline = false
 
-# One palette for both modes, because Streamlit registers this key at [theme]
-# only. Two constraints, both measured rather than eyeballed:
+# One palette for both modes — a choice, no longer a constraint. Through 1.60
+# this key was registered at `[theme]` only, and a per-mode declaration was
+# silently *discarded*: "not a valid config option" on stderr, `st.get_option`
+# raising, charts falling back to the built-in palette. As of 1.62 it is
+# registered in all six theme locations (`[theme]`, `[theme.sidebar]`,
+# `[theme.light]`, `[theme.dark]` and both `.sidebar` sub-tables) — measured on
+# the installed version: a per-mode palette is read back correctly with nothing
+# on stderr, and `st.get_option("theme.light.chartCategoricalColors")` returns
+# `None` rather than raising. (Contrast `theme.light.baseFontSize`, which still
+# raises — that one really is `[theme]`-only.) So a per-mode palette is
+# available; this file keeps one because these eight were chosen to clear 3:1
+# on *both* backgrounds, and two palettes to re-tune buys nothing here.
+#
+# Two constraints on the single palette, both measured rather than eyeballed:
 #
 #   - Every entry clears 3:1 (WCAG non-text minimum) against *both* #FFFFFF and
 #     the dark mode's #0F172A. That is a luminance band of [0.126, 0.300], which

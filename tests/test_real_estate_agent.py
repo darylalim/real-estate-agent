@@ -1347,6 +1347,55 @@ def test_the_listings_table_drops_columns_rather_than_masking_them() -> None:
     assert not missing, f"_NOT_IN_THE_TABLE names columns that do not exist: {missing}"
 
 
+def test_the_listings_table_orders_every_column_it_does_not_hide() -> None:
+    """`column_order` is exhaustive, and whatever it leaves out is named.
+
+    A column missing from `column_order` is *hidden*, not withheld — the reader
+    can restore it from the column-visibility menu and its values ship either
+    way, which is why `city` and `state` take that route: constant down every
+    row, so noise in the table, but still wanted in the toolbar's CSV export.
+    It is the wrong outcome for a field nobody chose. Add one to `Listing` and
+    it lands in the frame, appears in neither constant, and vanishes from the
+    table with nothing raised — the silent half of the pair whose loud half
+    (`drop` raising `KeyError` on a rename) the test above already pins.
+    """
+    from ui.market_data import listings_frame
+
+    dropped = set(_market_page_constant("_NOT_IN_THE_TABLE"))
+    order = set(_market_page_constant("_TABLE_ORDER"))
+    hidden = set(_market_page_constant("_HIDDEN_BUT_EXPORTED"))
+
+    frame = listings_frame("Hilo", "HI", None, "active")
+    assert not frame.empty, "fixture market went empty; the checks below prove nothing"
+    kept = {name for name in frame.columns if name not in dropped}
+
+    assert order <= kept, f"_TABLE_ORDER names columns the table never receives: {order - kept}"
+    assert kept - order == hidden, (
+        "every column surviving the drop must be ordered, or named in "
+        f"_HIDDEN_BUT_EXPORTED: {sorted(kept - order - hidden)}"
+    )
+
+
+def test_the_map_status_colours_match_the_chart_palette() -> None:
+    """The map's dots are the theme's palette, not a hand copy of it.
+
+    `_STATUS_MARKS` restates three hexes `.streamlit/config.toml` already holds,
+    and the scatter panel beside the map takes its colours from the theme — so
+    retuning `chartCategoricalColors`, which that file's own comment invites,
+    would move one panel and not the other, and the legend's colour words would
+    then describe whichever entry moved. Same family as the skill paths and the
+    HOA basis: a constant shared across files by hand, closed with a test rather
+    than a comment.
+    """
+    palette = _theme_config()["theme"]["chartCategoricalColors"]
+    dots = [colour for colour, _ in _market_page_constant("_STATUS_MARKS").values()]
+
+    assert dots == palette[: len(dots)], (
+        f"the map's status colours have drifted from the theme palette: "
+        f"{dots} != {palette[: len(dots)]}"
+    )
+
+
 def _theme_config() -> dict[str, Any]:
     return tomllib.loads((PROJECT_ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
 
@@ -1365,13 +1414,19 @@ def _dotted_keys(section: dict[str, Any], prefix: str) -> list[str]:
 def test_every_theme_setting_is_a_real_config_option() -> None:
     """Streamlit *discards* a misplaced theme key; it does not reject the file.
 
-    An option registered at `[theme]` only — `chartCategoricalColors` is one —
+    An option registered at `[theme]` only — `baseFontSize` is one, and so are
+    `baseFontWeight` and `showSidebarBorder`, all three used in this file —
     logs "not a valid config option" to stderr when it appears under
     `[theme.light]`, and is then simply absent. The app starts, looks styled,
-    and silently uses the built-in palette. That shipped here: both modes
-    carried a hand-tuned categorical palette that Streamlit never read, and the
-    test guarding this file checked two keys out of sixty, so the suite was
-    green over a theme discarding a third of its content.
+    and silently uses the built-in value. That shipped here: both modes carried
+    a hand-tuned categorical palette that Streamlit never read, and the test
+    guarding this file checked two keys out of sixty, so the suite was green
+    over a theme discarding a third of its content.
+
+    That example was `chartCategoricalColors`, which is **no longer** one: as of
+    1.62 it is registered in all six theme locations. Hence asking the registry
+    rather than naming keys — the set of `[theme]`-only options moves between
+    releases, and a hardcoded list would have gone stale at exactly that bump.
 
     `st.get_option` is the registry, so ask it about every leaf rather than
     maintaining a second list of what is valid.

@@ -27,11 +27,12 @@ uv run python main.py --require-approval         # pause before save_draft
 uv run python main.py --thread <id>              # continue a conversation (persisted to workspace/)
 
 uv run streamlit run streamlit_app.py            # the same agent in a browser, plus a market dashboard
+uv run --no-sync streamlit docs st.metric        # exact signature + docstring on the *installed* 1.62
 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 79 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 81 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -358,6 +359,18 @@ property-search workflow is not.
 `streamlit_app.py` (a two-page `st.navigation`), `app_pages/chat.py`, `app_pages/market.py`, `ui/`, and
 `.streamlit/config.toml`.
 
+**Check Streamlit against the installed package, not against memory or the web docs.** `uv run --no-sync
+streamlit docs st.<command>` prints the real 1.62 signature and docstring, and the version-matched reference
+docs the `developing-with-streamlit` skill routes to are inside the venv — locate them with `python3
+~/.claude/skills/developing-with-streamlit/scripts/discover.py --project-dir .` (`python3`, not `python`,
+which is not on PATH here). For a *rendering* claim, `AppTest` exposes the proto:
+`at.get("metric")[i].proto.direction` against `Metric.MetricDirection` settled two of the defects below.
+`get()` is keyed on the **proto** name rather than the command's, and it does reach into the sidebar —
+measured on `market.py`, whose selectboxes are all in the sidebar, `at.get("selectbox")` returns both, while
+`at.get("segmented_control")` returns `[]` and `at.get("button_group")` returns 1. The typed accessor
+(`at.segmented_control`) is the one that reads the way you expect. Nearly every measured claim in this
+section came from one of those three; a claim from none of them is a guess.
+
 **All of these live outside `src/real_estate_agent/`, deliberately.** The package exposes `build_agent` through a
 lazy `__getattr__` so importing a provider does not drag in LangChain; putting Streamlit imports inside it
 would undo that for every consumer, the CLI included. The app is a consumer of the package exactly as
@@ -415,10 +428,42 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
     description says so. `[theme.sidebar]` restates them.
 
   No CSS anywhere; `st.markdown(unsafe_allow_html=True)` and `st.html` are not how this app is styled.
+- **`st.metric` classifies a delta by parsing it, and `delta_color` is not `delta_arrow`.** Two defects,
+  one root: the direction rule is "None or empty → no arrow; zero → no arrow, grey; starts with `-` →
+  down/red; **otherwise up/green**", and it runs on whatever is passed. `delta_color="off"` greys the delta
+  and leaves the arrow — so "Months of inventory" drew a grey *up*-arrow beside "Buyer's market" and beside
+  "No closed sales in the window". `delta_arrow="off"` (1.62) is the parameter that means what the colour
+  one was being asked to. And the zero branch is a check on a *number*: `"$0 vs closed"` is a string, so a
+  market whose asking and closed medians agree fell through to up/green. The asking delta now takes
+  `delta_arrow`/`delta_color` computed from `price_delta`, which keeps `_money`'s sign-outside-the-symbol
+  convention load-bearing rather than making it decorative. `format="dollar"` would let Streamlit classify
+  a real number instead, and was **not** taken: it renders cents, and the printf alternative formats
+  client-side where nothing here can measure it.
+- **Two smaller controls, both silent when wrong.** `st.segmented_control` defaults to `required=False`, so
+  a second click deselects: the Status filter returned `None`, the `or "Active"` fallback filtered to
+  active, and the page counted and captioned active listings while the control showed no selection at all.
+  `required=True` closes it; the fallback stays as defence. And the map is coloured by `status` from the
+  theme's first three `chartCategoricalColors` — the triad measured for colour-vision deficiency — attached
+  with `.assign` so it never reaches the table below, and looked up through `.str.lower()` because
+  `ListingsProvider.search` documents its own matching as case-insensitive — a feed storing `"Active"` would
+  filter correctly and paint every dot the unknown grey. `_STATUS_MARKS` holds the status, its hex and the
+  legend's word for that hex in one literal, tied to the theme by
+  `test_the_map_status_colours_match_the_chart_palette`. The legend names only the statuses actually drawn,
+  and names them **in words**: `:blue[…]` markdown resolves to the theme's *semantic* `blueColor`, not to
+  the chart palette, so a swatch is a near-match that is simply wrong for the teal one.
 - **`market.py` drops columns before `st.dataframe`, rather than hiding them with `column_config`.**
   `{name: None}` hides a column in the browser and still serialises every value into the payload. Note the
   trade: `frame.drop(columns=...)` raises `KeyError` on a name that is not there, so `_NOT_IN_THE_TABLE` is
   checked against a real frame by `test_the_listings_table_drops_columns_rather_than_masking_them`.
+  `column_order` is **ordering only, and hides on the same terms `column_config` does** — Streamlit's own
+  note says an omitted column "can still be shown by the user via the column visibility menu", and its
+  values serialise regardless. That makes the two mechanisms non-interchangeable rather than redundant:
+  omission is right for `city` and `state`, constant down every row and so noise in the table, but still
+  wanted in the toolbar's CSV export, where a download with no market recorded on it is worse than a
+  repeated value. Dropping is for payload that must not reach the browser at all. Both halves are pinned —
+  `_HIDDEN_BUT_EXPORTED` names the deliberate omissions so
+  `test_the_listings_table_orders_every_column_it_does_not_hide` can fail on a `Listing` field that nobody
+  chose to hide, which is otherwise the silent half of the pair.
   A stable `key=` on that table was tried and **dropped**: the general advice is that an unkeyed
   dataframe's identity includes its data, so a filter change remounts it and loses the reader's sort —
   but measured on 1.60, sorting by price and then switching property type kept the sort *with and

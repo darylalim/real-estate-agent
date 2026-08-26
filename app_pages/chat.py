@@ -90,11 +90,24 @@ def _workspace_browser() -> None:
             file_name=Path(chosen).name,
             icon=":material/download:",
             width="stretch",
+            # `on_click` defaults to "rerun", and handing a reader a file they
+            # already have changes nothing this fragment displays — so the
+            # default bought a re-glob of the workspace tree and a second read
+            # of the file, per click, to redraw an identical sidebar.
+            on_click="ignore",
         )
     # Lazy so that picking a file does not ship its contents to a reader who
     # only wanted a different name in the list. `read_workspace_file` above
-    # still runs -- `st.download_button` needs the bytes in hand -- so what
-    # this saves is the decode and the payload.
+    # still runs, so what this saves is the decode and the payload.
+    #
+    # It runs *by choice*, not by necessity: `st.download_button` takes a
+    # callable for `data` and defers the read until the click. Deferring here
+    # would buy microseconds -- the eager path keeps the bytes server-side and
+    # ships a URL, and these artifacts are kilobytes against a page whose
+    # dominant cost is `thread_snapshot` -- and would cost the containment
+    # check in `read_workspace_file` plus this module's rule that the page
+    # never does path arithmetic of its own. Worth knowing the option exists;
+    # not worth taking here.
     #
     # Keyed on the *file*, not just given some key. The label is the constant
     # "Preview", and an expander's identity is its parameters, so a single key
@@ -182,13 +195,11 @@ with st.sidebar:
             st.session_state.last_suggestion = None
             st.rerun()
 
-    st.divider()
     st.subheader("Workspace")
     # The sidebar has already been written to by everything above, which is what
     # lets a fragment render into it and redraw in place on its own reruns.
     _workspace_browser()
 
-    st.divider()
     st.caption(f"Orchestrator · `{DEFAULT_MODEL}`")
     if SUBAGENT_MODEL != DEFAULT_MODEL:
         st.caption(f"Specialists · `{SUBAGENT_MODEL}`")
@@ -279,7 +290,8 @@ if actions:
 
         # A mapping, not a bare list: the middleware reads
         # `interrupt(request)["decisions"]`.
-        stream_turn(agent, Command(resume={"decisions": decisions}), config, seen)
+        with st.spinner("Resuming…", show_time=True):
+            stream_turn(agent, Command(resume={"decisions": decisions}), config, seen)
         st.rerun()
 
     st.stop()
@@ -301,7 +313,13 @@ if not prompt and suggestion and suggestion != st.session_state.last_suggestion:
     prompt = SUGGESTIONS[suggestion]
 
 if prompt:
-    stream_turn(agent, {"messages": [{"role": "user", "content": prompt}]}, config, seen)
+    # `stream_mode="values"` emits once per super-step, so nothing is drawn
+    # while the orchestrator waits on a `task` delegation -- which is one tool
+    # call that can be minutes away, and the final synthesis is one more. Without
+    # this the only feedback in that window is the toolbar's own "Running" and a
+    # greyed-out chat input. Streamed messages still render in order underneath.
+    with st.spinner("Delegating and drafting…", show_time=True):
+        stream_turn(agent, {"messages": [{"role": "user", "content": prompt}]}, config, seen)
     # Always, not only when an interrupt is pending. The sidebar's workspace
     # list is built near the top of the run, before the turn writes anything --
     # so without this the shortlist, CMA and drafts the specialists just created
