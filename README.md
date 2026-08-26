@@ -197,7 +197,7 @@ one.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | Required. |
 | `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` / `LANGSMITH_PROJECT` | — | Recommended. Current names — use these. The legacy `LANGCHAIN_*` spellings still work as fallbacks (see below). |
-| `REA_MODEL` | `anthropic:claude-opus-5` | Orchestrator. LangChain needs the `provider:model` prefix. |
+| `REA_MODEL` | `anthropic:claude-opus-5` | Orchestrator. Keep the `provider:model` prefix: `require_api_key()` reads it to decide which key to demand, and assumes Anthropic without one. |
 | `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
 
 **On the legacy `LANGCHAIN_*` names.** An earlier version of this table said they
@@ -225,7 +225,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 76 tests, ~1.4s
+uv run pytest tests/ -q       # 79 tests, ~1.5s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```

@@ -31,7 +31,7 @@ uv run streamlit run streamlit_app.py            # the same agent in a browser, 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 76 tests, ~1.4s, no API calls
+uv run pytest tests/ -q                          # full suite: 79 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -60,16 +60,21 @@ set — verified against 0.15.0. ty has no such setting, so its pin holds only f
 `scripts/check.sh`; `uvx ty check` typed directly still resolves whatever is newest. That is a real gap, just
 a narrower one than before, and `test_check_script_pins_match_the_docs` at least stops the script and the docs
 disagreeing. CI now runs the same script on every push and PR, so the pin holds off this machine too — see
-below. Bump a pin deliberately, don't drop it. The dev dependencies are `pytest` and `langsmith`, and the second is
-not optional decoration — `tests/` imports `tracing_is_enabled` from it at module scope, so removing it breaks
-collection rather than one test. `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
+below. Bump a pin deliberately, don't drop it. The dev dependencies are `pytest` and `langsmith`, and the
+second is declared rather than inherited: `tests/` imports `tracing_is_enabled` from it at module scope, and
+langsmith *also* arrives transitively through `deepagents` and `langchain-core`. So deleting the entry leaves
+the suite green today and breaks it the day that transitive path changes — measured, `uv run --no-dev python
+-c "import langsmith.utils"` still imports 0.11.1. A direct import gets a direct declaration.
+`.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
 
 **`ruff check` yes, `ruff format` no.** The formatter would rewrite 10 of the 23 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
 reports a total of 28, not 23: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
-this file, and the three `SKILL.md` files are in its denominator. All 10 rewrites are `.py`.) Both counts
-are measurements rather than constants — they read 7-of-14 and 19 when first written, and drifted in
-silence as the repo grew, so re-derive them instead of trusting them. A consequence worth knowing:
+this file, and the three `SKILL.md` files are in its denominator. All 10 rewrites are `.py`.) The two
+denominators read 14 and 19 when first written and drifted in silence as the repo grew, so
+`test_documented_file_counts_match_the_tree` now gates them — a caveat telling the next reader to re-derive
+was the same instruction that had already failed once. The rewrite count needs the formatter itself and
+stays prose. A consequence worth knowing:
 blank-line and whitespace structure has no gate at all, since `E3` is preview-only in 0.16.1 and the
 formatter is the only other thing that would catch it.
 
@@ -342,7 +347,9 @@ Consequences worth remembering:
 ### Skills
 
 Three specialists load a skill; `property-search` is prompt-only on purpose. **Skills are not inherited from the
-orchestrator** — each subagent declares its own in `subagents.py`, pinned by `test_subagents_carry_their_own_skills`.
+orchestrator** — each subagent declares its own in `subagents.py`. `test_subagents_carry_their_own_skills`
+pins the *declaration* and nothing more; `test_every_declared_skill_resolves_on_disk` pins that the directory
+it names exists.
 The criterion is size: CMA adjustment grids and clause checklists are too big for a system prompt; a
 property-search workflow is not.
 
@@ -458,8 +465,9 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
 ## Invariants that fail silently
 
 Each of these is load-bearing, and breaking one produces plausible-looking wrong output rather than an error.
-Most name the test that pins them. Three do not, and say so in place: the model-prefix bullet, `save_draft` as
-the sole draft path, and the always-rerun rule are held up by prose and prompt surface alone.
+Most name the test that pins them. The ones that do not say so in bold, in place — not counted here, because a
+number in this position is the trap this file objects to twice elsewhere and it went stale within a commit of
+being written.
 
 - **Permission rules are order-sensitive: first match wins, and an unmatched path defaults to *allow*.** The
   allows in `WORKSPACE_PERMISSIONS` must precede the catch-all write deny. `test_permission_matrix` imports the
@@ -472,15 +480,20 @@ the sole draft path, and the always-rerun rule are held up by prose and prompt s
   `test_agent_exposes_planning_and_delegation` cannot tell you: it collects names into a **set**, so a
   duplicate registration is invisible to it. That case has its own test —
   `test_planning_middleware_is_pinned_because_it_is_not_automatic` builds the graph both ways and goes red
-  if deepagents ever starts adding the middleware itself. So the both-ways diff described above is what the
-  suite already runs every time, not a chore to remember on a version bump.
+  if deepagents starts adding the middleware itself. It does **not** retire the re-verification above, and an
+  earlier version of this line wrongly said it did: the test hardcodes `model="anthropic:claude-opus-5"`
+  rather than reading `DEFAULT_MODEL`, so the hazard this bullet exists for — a *different* model string
+  resolving a different harness profile — is the one case it cannot see. Re-run the diff by hand when
+  `REA_MODEL` changes, not only when deepagents does.
 - **Models carry the LangChain `provider:model` prefix, and `require_api_key()` reads it.** The prefix is this
   repo's convention, not a hard requirement, and an earlier version of this line said otherwise. Measured:
   `init_chat_model` infers `anthropic` from any `claude-*` name, so a bare `claude-opus-5` **does** resolve and
   `build_agent` returns an identical ten-tool graph either way. It is genuinely required only for names
   langchain cannot infer. Keep the prefix regardless — `require_api_key()` derives which key to demand from it
-  and falls back to `"anthropic"` when there is no `:`. Nothing tests any of this, and `config.py` carried the
-  same wrong claim in a comment until it was corrected alongside this line.
+  and falls back to `"anthropic"` when there is no `:` — which is only the right guess for Anthropic names, so
+  a bare `gpt-4o` makes it demand `ANTHROPIC_API_KEY` and never check the key the run needs. **No test holds
+  any of this.** `config.py`, `README.md` and `.env.example` all carried the same wrong claim until it was
+  corrected alongside this line; a grep for `provider:model` is the check nobody ran.
 - **`.env` is loaded by the entry points, never at package import.** `config.py` used to call `load_dotenv()`
   at module scope, which meant importing the package applied a developer's personal configuration to every
   consumer — the test suite included. Three variables leaked and each fails differently: `LANGSMITH_TRACING`
@@ -607,12 +620,13 @@ the case text handles fine.
   `save_draft` docstring in `comms.py` and the liaison prompt in `subagents.py`, both model-facing prose, and
   `WORKSPACE_PERMISSIONS` structurally *allows* a `write_file` into `/workspace/drafts/`. Shortening either
   string is a behaviour change with a green suite.
-- **Two constants are shared across files by hand, and neither pairing has a test.** The three skill paths in
-  `subagents.py` are string literals (`/skills/cma-analysis`, …) with nothing tying them to the directories in
-  `skills/` — `SKILLS_DIR` in `config.py` is dead code, and `test_subagents_carry_their_own_skills` compares
-  the literal against itself, so renaming a skill directory leaves the suite green and the specialist running
-  with no methodology. Likewise `_HOA_CAPITALISATION = 100` in `comms.py` restates the `~100×` factor in
-  `skills/cma-analysis/SKILL.md`; change one and the same fee is worth two amounts on one screen.
+- **Two constants are shared across files by hand.** The three skill paths in `subagents.py` are string
+  literals (`/skills/cma-analysis`, …), and `_HOA_CAPITALISATION = 100` in `comms.py` restates the `~100×`
+  factor in `skills/cma-analysis/SKILL.md`. Both were unguarded until review caught them: renaming a skill
+  directory left the suite green and the specialist running with no methodology, and changing either HOA
+  basis let one fee be worth two amounts on one screen. `test_every_declared_skill_resolves_on_disk` and
+  `test_the_hoa_capitalisation_matches_the_cma_skill` close them, and the first is what gives `SKILLS_DIR`
+  in `config.py` its only reader.
 - **`ui.agent_session.message_key` and `main._message_key` must stay identical.** Both dedupe a
   `stream_mode="values"` stream, and both read the same checkpoint database — so a thread started in the CLI
   and reopened in the browser reprints its entire history if they drift.
@@ -650,7 +664,10 @@ the case text handles fine.
   have never been seen. `test_the_decision_control_gets_a_fresh_key_for_each_approval_round` pins both halves.
 - **A turn always re-runs the page.** The sidebar's workspace list is built near the top of a run, before the
   turn writes anything, so a conditional re-run left the answer citing a CMA by path while the sidebar still
-  said "Nothing written yet". The cost is one repaint of content re-read from the checkpoint.
+  said "Nothing written yet". The cost is one repaint of content re-read from the checkpoint. **No test holds
+  this** — proved by mutation: re-wrapping the final `st.rerun()` in `if actions:` leaves the page's tests
+  green, because `test_the_approval_toggle_renders_before_anything_that_can_rerun` asserts only that reruns
+  exist below the toggle.
 
 **The Streamlit lesson behind the widget bullets above:** widget state is keyed and lifecycle-bound. If a
 keyed widget does not render on a run its value is discarded; if it does render with the same key, the

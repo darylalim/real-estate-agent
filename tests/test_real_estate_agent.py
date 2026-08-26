@@ -24,7 +24,7 @@ from deepagents.middleware.filesystem import _check_fs_permission
 from langchain_core.tools import BaseTool
 from langsmith.utils import tracing_is_enabled
 
-from real_estate_agent.config import PROJECT_ROOT
+from real_estate_agent.config import PROJECT_ROOT, SKILLS_DIR
 from real_estate_agent.providers import MockListingsProvider
 from real_estate_agent.providers.base import Listing
 from real_estate_agent.providers.mock import PROPERTY_TYPES, _pool
@@ -1646,8 +1646,8 @@ def test_each_entry_point_loads_dotenv_before_the_package() -> None:
 def test_the_suite_does_not_trace_to_langsmith() -> None:
     """Tracing on during the suite spends a LangSmith quota and nothing reports it.
 
-    `config.py` calls `load_dotenv()` at import, so importing the package pulls a
-    developer's real `.env` — which `.env.example` documents as carrying
+    `config.py` used to call `load_dotenv()` at import, so importing the package
+    pulled a developer's real `.env` — which `.env.example` documents as carrying
     `LANGSMITH_TRACING=true` — into the environment. Every `tool.invoke()` in
     this file is then a **root** run, and LangSmith bills per trace rather than
     per span, so 17 one-span traces per run cost what 17 whole agent
@@ -1669,8 +1669,8 @@ def test_the_suite_does_not_trace_to_langsmith() -> None:
 
     Asserting the *value* conftest writes fixes that in both directions. Absent
     the conftest the name is unset (`None`) on a clean checkout and `"true"` on a
-    developer's, and neither equals `"false"`; with `load_dotenv(override=True)`
-    in `config.py` it is `"true"`. `tracing_is_enabled()` stays as the second
+    developer's, and neither equals `"false"`; under any `load_dotenv(override=True)`
+    reached during collection it is `"true"`. `tracing_is_enabled()` stays as the second
     assertion because it is what LangChain actually consults, so it still catches
     a langsmith release that reads some name conftest does not set.
 
@@ -1686,7 +1686,7 @@ def test_the_suite_does_not_trace_to_langsmith() -> None:
     assert not tracing_is_enabled(), (
         "LangSmith tracing is enabled during the test suite -- every tool.invoke() "
         "here is a billable root run. tests/conftest.py must disable it before "
-        "real_estate_agent.config calls load_dotenv()."
+        "anything imports the package, and nothing may override it afterwards."
     )
 
 
@@ -1721,3 +1721,96 @@ def test_documented_test_count_matches_the_suite(request: pytest.FixtureRequest)
             f"{name} does not say {total} tests, which is what this run collected. "
             "If this was a filtered run, the guard above missed a subsetting option."
         )
+
+
+# Everything gitignored, so this mirrors what ruff actually walks: ruff respects
+# .gitignore, and `workspace/` holds agent-written drafts whose count is a
+# function of how many times anyone ran the CLI.
+_UNTRACKED_DIRECTORIES = frozenset(
+    {".venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", ".ty_cache", "workspace"}
+)
+
+
+def _tree_files(suffix: str) -> list[Path]:
+    """Every `*.suffix` under the project that ruff would also see."""
+    return [
+        path
+        for path in PROJECT_ROOT.rglob(f"*{suffix}")
+        if not _UNTRACKED_DIRECTORIES & set(path.parts)
+    ]
+
+
+def test_documented_file_counts_match_the_tree() -> None:
+    """CLAUDE.md's two ruff-format denominators are file counts, so gate them.
+
+    They were written as "7 of the 14 Python files" and "a total of 19", were
+    correct then, and were silently wrong by the time anyone re-ran the
+    formatter — 10 of 23, and 28. The prose that replaced them said to re-derive
+    rather than trust, which is the same instruction that had already failed:
+    the originals were correct when written too. The rewrite count needs ruff
+    itself and stays prose; these two do not.
+    """
+    python_files = _tree_files(".py")
+    markdown_files = _tree_files(".md")
+    text = (PROJECT_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert re.search(rf"\b{len(python_files)} Python files\b", text), (
+        f"CLAUDE.md does not say {len(python_files)} Python files, which is what the tree holds. "
+        "Re-run `uvx ruff@0.16.1 format --check .` and update both numbers in that paragraph."
+    )
+    total = len(python_files) + len(markdown_files)
+    assert re.search(rf"\ba total of {total}\b", text), (
+        f"CLAUDE.md does not say a total of {total} ({len(python_files)} .py + "
+        f"{len(markdown_files)} .md), which is ruff's denominator since 0.16 began "
+        "formatting Python fences inside Markdown."
+    )
+
+
+def test_every_declared_skill_resolves_on_disk() -> None:
+    """`test_subagents_carry_their_own_skills` compares a literal against itself.
+
+    The skill paths in `subagents.py` are virtual strings resolved against the
+    FilesystemBackend root, and nothing tied them to the directories they name.
+    Renaming `skills/cma-analysis/` therefore left the whole suite green and the
+    analyst running with no methodology — the silent-failure shape this section
+    exists for, found by review rather than by a test. `SKILLS_DIR` in
+    `config.py` had no readers at all until this one.
+    """
+    from real_estate_agent import subagents
+
+    declared = sorted(
+        value
+        for name, value in vars(subagents).items()
+        if name.startswith("SKILL_") and isinstance(value, str)
+    )
+    assert declared, "no SKILL_* constants in subagents.py; this test is now vacuous"
+
+    for virtual_path in declared:
+        assert virtual_path.startswith("/skills/"), (
+            f"{virtual_path} is not under /skills/, so SKILLS_DIR cannot resolve it"
+        )
+        directory = SKILLS_DIR / virtual_path.removeprefix("/skills/")
+        assert (directory / "SKILL.md").is_file(), (
+            f"{virtual_path} is declared in subagents.py but {directory}/SKILL.md does not "
+            "exist. Renaming or moving a skill directory fails nothing else here."
+        )
+
+
+def test_the_hoa_capitalisation_matches_the_cma_skill() -> None:
+    """One basis for an association fee, stated in Python and again in a skill.
+
+    `_HOA_CAPITALISATION` is the purchase-price equivalent of $1/month of fee,
+    and `cma-analysis` states the same multiplier for its HOA adjustment row.
+    The analyst valuing a fee delta and the liaison testing a budget against one
+    answer the same question, so two bases would let a single fee be worth two
+    amounts on one screen — at Hawaii's fee levels, that decides the
+    affordability answer rather than decorating it.
+    """
+    from real_estate_agent.tools.comms import _HOA_CAPITALISATION
+
+    skill = (SKILLS_DIR / "cma-analysis" / "SKILL.md").read_text(encoding="utf-8")
+    assert re.search(rf"~{_HOA_CAPITALISATION}×\s*the monthly delta", skill), (
+        f"comms.py capitalises an HOA fee at {_HOA_CAPITALISATION}x the monthly figure, "
+        "which no longer matches the multiplier in skills/cma-analysis/SKILL.md. "
+        "Change both or neither."
+    )

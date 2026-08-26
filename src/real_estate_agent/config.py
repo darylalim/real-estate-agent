@@ -52,7 +52,10 @@ CHECKPOINT_DB = WORKSPACE_DIR / "checkpoints.db"
 # LangChain resolves "provider:model" strings through init_chat_model. The
 # prefix is this repo's convention, not a hard requirement — init_chat_model
 # infers "anthropic" from any "claude-*" name, so a bare "claude-opus-5" does
-# resolve. Keep it: require_api_key() derives which key to demand from it.
+# resolve. Keep it anyway: require_api_key() reads the prefix and falls back to
+# "anthropic" when there is no ":", which is the right guess for exactly one
+# provider. A bare "gpt-4o" makes it demand ANTHROPIC_API_KEY and never check
+# OPENAI_API_KEY — measured.
 DEFAULT_MODEL = os.getenv("REA_MODEL", "anthropic:claude-opus-5")
 
 # Subagents inherit the orchestrator's model unless overridden. Kept separate

@@ -1,8 +1,12 @@
 """Tracing off for the suite, before anything imports the package.
 
-`config.py` calls `load_dotenv()` at import time and `.env` sets
+`config.py` *used to* call `load_dotenv()` at import time, and `.env` sets
 `LANGSMITH_TRACING=true`, so merely importing `real_estate_agent` was enough to
-turn tracing on for every test. Each `tool.invoke()` in the suite is then a
+turn tracing on for every test. That call is gone -- 2055182 moved it to the
+entry points and `test_config_does_not_load_dotenv_at_import` now forbids it --
+so this file is the second line of defence rather than the only one. The first
+line does not cover a `LANGSMITH_TRACING=true` exported in a shell, which never
+went through `.env` at all, and that is why this file still assigns. Each `tool.invoke()` in the suite is then a
 LangSmith **root** run — one billable trace apiece, and LangSmith bills per
 trace, not per span. Measured when this was found: 17 per full run, against a
 Stop hook that runs the whole suite every turn. A live agent turn, by contrast,
@@ -15,8 +19,9 @@ Two details make the override work, both easy to undo by accident:
   `real_estate_agent.config` is first imported. The same lines inside the test
   module would be too late — `load_dotenv()` would already have fired.
 - `load_dotenv()` defaults to `override=False`, so an already-set variable wins
-  over `.env`. Passing `override=True` there would defeat this entirely, which
-  is what `pytest_collection_finish` below is watching for.
+  over `.env`. Passing `override=True` in an entry point -- or anywhere that
+  runs after this file -- would defeat it entirely, which is what
+  `pytest_collection_finish` below is watching for.
 
 `os.environ.setdefault` is the tempting simplification and it is **wrong**:
 `.env` has not been read at conftest time, so setdefault leaves the name unset
@@ -62,8 +67,8 @@ def pytest_collection_finish() -> None:
     puts it after all 17 traced `invoke`s — so on the run that detects a
     regression the spend has already happened, and a `-k`-filtered run that
     never reaches it spends with no report at all. Collection has imported the
-    test module by now, and therefore `config.py`, so `load_dotenv()` has fired
-    and a `override=True` there is visible here — before any test executes.
+    test module by now, and therefore the package, so anything an import turns
+    back on is visible here — before any test executes.
 
     This cannot catch its own file being deleted; a hook in the file being
     removed does not run. That case belongs to the test, which asserts on the
@@ -76,7 +81,8 @@ def pytest_collection_finish() -> None:
         pytest.exit(
             "LangSmith tracing was re-enabled after tests/conftest.py set it off "
             f"({', '.join(live)}). Every tool.invoke() in this suite is a billable "
-            "root run; aborting before any of them execute. The usual cause is "
-            "load_dotenv(override=True) in real_estate_agent/config.py.",
+            "root run; aborting before any of them execute. The usual causes are "
+            "an exported LANGSMITH_TRACING/LANGCHAIN_TRACING_V2, or a "
+            "load_dotenv(override=True) reached during collection.",
             returncode=1,
         )
