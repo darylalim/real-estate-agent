@@ -118,7 +118,7 @@ with st.sidebar:
     property_type_label = st.selectbox(
         "Property type", ["All", *property_types], key="market_type"
     )
-    # `required=True`, because the 1.62 default lets a second click *deselect*
+    # `required=True`, because the default (still, on 1.64) lets a second click *deselect*
     # the chosen segment. That returned None, the fallback below mapped it back
     # to "active", and the page then filtered, counted and captioned Active
     # listings while the control displayed no selection at all — nothing on

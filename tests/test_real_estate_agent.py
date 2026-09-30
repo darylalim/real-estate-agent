@@ -827,7 +827,7 @@ def _tool_names(agent) -> set[str]:
 
 
 def test_agent_exposes_planning_and_delegation(monkeypatch) -> None:
-    """`write_todos` is not automatic (0.7.1, re-verified 0.7.8) — the prompt needs it."""
+    """`write_todos` is not automatic (0.7.1, re-verified 0.7.8, 0.7.21) — the prompt needs it."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
     from real_estate_agent.agent import build_agent
 
@@ -841,7 +841,7 @@ def test_planning_middleware_is_pinned_because_it_is_not_automatic(monkeypatch) 
     """The pin in `agent.py` must stay load-bearing, not become a duplicate.
 
     `build_agent` passes `middleware=[TodoListMiddleware()]` because deepagents
-    does not add it itself — true on 0.7.1 and re-verified on 0.7.8. If a later
+    does not add it itself — true on 0.7.1 and re-verified on 0.7.8 and 0.7.21. If a later
     release starts adding it, that pin silently becomes a *second* registration
     of `write_todos`, which the model rejects at request time and no existing
     test sees: `test_agent_exposes_planning_and_delegation` collects names into
@@ -1185,7 +1185,7 @@ def test_the_workspace_browser_is_a_fragment() -> None:
 # The next three pin one Streamlit rule, a layer under the widget-state family
 # above: **a collapsed expander still renders its body**, and **a stateful
 # expander's identity is its parameters**. Both halves were measured on 1.60 and
-# re-measured on 1.62 --
+# re-measured on 1.62 and 1.64 --
 # two same-label stateful expanders in one run raise StreamlitDuplicateElementId
 # and the page renders nothing; a shared constant key raises
 # StreamlitDuplicateElementKey instead. So the danger runs both ways: too little

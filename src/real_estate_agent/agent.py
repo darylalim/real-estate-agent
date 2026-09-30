@@ -137,7 +137,7 @@ def build_agent(
         checkpointer = InMemorySaver()
 
     # The planning middleware is *not* added automatically — verified on 0.7.1
-    # and again on 0.7.8. The middleware stack is resolved from a
+    # and again on 0.7.8 and 0.7.21. The middleware stack is resolved from a
     # per-`provider:model` harness profile, so `write_todos` may or may not
     # exist depending on the model string. The orchestrator prompt depends on
     # it, so pin it explicitly.

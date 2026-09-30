@@ -1908,16 +1908,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "deepagents", specifier = ">=0.7.8" },
+    { name = "deepagents", specifier = ">=0.7.21" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.1" },
-    { name = "pypdf", specifier = ">=6.16.2" },
+    { name = "pypdf", specifier = ">=6.19.0" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
-    { name = "streamlit", specifier = ">=1.62.0" },
+    { name = "streamlit", specifier = ">=1.64.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "langsmith", specifier = ">=0.11.1" },
+    { name = "langsmith", specifier = ">=0.14.2" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
 

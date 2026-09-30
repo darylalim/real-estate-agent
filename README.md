@@ -202,7 +202,7 @@ one.
 
 **On the legacy `LANGCHAIN_*` names.** An earlier version of this table said they
 "no longer work". That is wrong, and worth stating precisely because the mistake
-runs in the unsafe direction: langsmith 0.11.1 still reads nine of them —
+runs in the unsafe direction: langsmith 0.14.2 still reads nine of them —
 `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT`,
 `LANGCHAIN_SESSION`, `LANGCHAIN_ENDPOINT`, `LANGCHAIN_BASE_URL`,
 `LANGCHAIN_CUSTOM_HEADERS`, `LANGCHAIN_REVISION_ID`, `LANGCHAIN_LOG`. Measured:
@@ -412,14 +412,14 @@ Since fixed and regression-tested:
   needed key from the model's provider prefix instead of always demanding an
   Anthropic one.
 
-## Notes on deepagents 0.7.8
+## Notes on deepagents 0.7.21
 
 `write_todos` is **not** added automatically. The middleware stack resolves from
 a per-`provider:model` harness profile, so planning may or may not be present
 depending on the model string. `agent.py` pins `TodoListMiddleware()` explicitly
 rather than depending on that resolution — `tests/` asserts it stays wired.
 
-This held on 0.7.1 and was re-verified on 0.7.8 by building the graph with and
+This held on 0.7.1 and was re-verified on 0.7.8 and 0.7.21 by building the graph with and
 without the explicit middleware and diffing the tool list: `write_todos` appears
 only in the pinned build. Write containment was re-verified the same way — the
 first-match-wins rule evaluation and the unmatched-defaults-to-allow fallback are

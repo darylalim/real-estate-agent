@@ -8,17 +8,18 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11,<4.0"
 # Floors are raised to the versions the suite and the docs are actually verified
 # against, rather than the oldest that might work. Two of them carry real
-# behavioural claims: deepagents 0.7.8 is where `write_todos` was re-confirmed
-# non-automatic and the first-match-wins permission rules were re-measured, and
-# streamlit 1.62 is where `chartCategoricalColors` became settable per mode
-# (1.60 registered it at `[theme]` only). A floor below either makes CLAUDE.md
+# behavioural claims: deepagents 0.7.21 is where `write_todos` was last re-confirmed
+# non-automatic and the `execute` refusal re-measured, and streamlit 1.64 is
+# where the theme, metric and expander behaviour in CLAUDE.md was last
+# re-measured (1.62 is where `chartCategoricalColors` became settable per mode;
+# 1.60 registered it at `[theme]` only). A floor below either makes CLAUDE.md
 # describe a version the user is not running.
 dependencies = [
-    "deepagents>=0.7.8",
+    "deepagents>=0.7.21",
     "langgraph-checkpoint-sqlite>=3.1.1",
-    "pypdf>=6.16.2",
+    "pypdf>=6.19.0",
     "python-dotenv>=1.2.3",
-    "streamlit>=1.62.0",
+    "streamlit>=1.64.0",
 ]
 
 [tool.uv]
@@ -82,6 +83,6 @@ error-on-warning = true
 
 [dependency-groups]
 dev = [
-    "langsmith>=0.11.1",
+    "langsmith>=0.14.2",
     "pytest>=9.1.1",
 ]
