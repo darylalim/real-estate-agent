@@ -231,8 +231,10 @@ the enforcement that matters lives in `pyproject.toml`, `scripts/check.sh`, `tes
 the reasons differ:
 
 - **`protect-files.sh` → native `permissions.deny`.** The hook matched shell strings; the deny list in
-  `.claude/settings.json` names paths — `Read`/`Edit`/`Write` on `./.env` and `./.streamlit/secrets.toml`,
-  `Edit`/`Write` on `./uv.lock`. Measured on this checkout, the swap is **stronger in one direction, weaker in
+  `.claude/settings.json` names paths — `Read`/`Edit` on `./.env` and `./.streamlit/secrets.toml`, `Edit`
+  on `./uv.lock`. There is no `Write` rule because Claude Code ignores one: `Edit(path)` covers every
+  file-editing tool, `Write` included, and a `Write(path)` deny only prints a startup warning. Measured on
+  this checkout, the swap is **stronger in one direction, weaker in
   another, and a boundary in neither.** Stronger: `cat .env` is denied, and so is `E=.env; cat $E` — the exact
   bypass the hook's own header conceded — so the check parses the command and resolves simple assignments
   rather than matching text, which `echo .env` running confirms. `printf "" >> .env` is denied too. Weaker: it
