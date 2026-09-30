@@ -1187,9 +1187,9 @@ def test_the_workspace_browser_is_a_fragment() -> None:
 # expander's identity is its parameters**. Both halves were measured on 1.60 and
 # re-measured on 1.62 and 1.64 --
 # two same-label stateful expanders in one run raise StreamlitDuplicateElementId
-# and the page renders nothing; a shared constant key raises
-# StreamlitDuplicateElementKey instead. So the danger runs both ways: too little
-# keying kills the page, and no guard silently restores the payload.
+# and the run stops there, so nothing below it renders; a shared constant key
+# raises StreamlitDuplicateElementKey instead. So the danger runs both ways: too
+# little keying cuts the page off, and no guard silently restores the payload.
 
 
 def test_the_lazy_expander_helper_sets_the_flag_that_makes_open_meaningful() -> None:
@@ -1241,7 +1241,7 @@ def test_expander_bodies_render_only_when_open(
     assert key is not None, f"{function} must key its expander"
     assert not isinstance(key, ast.Constant), (
         "a constant key is worse than no key: the second element raises "
-        "StreamlitDuplicateElementKey and the page renders nothing"
+        "StreamlitDuplicateElementKey and nothing below it renders"
     )
     assert identity in {
         node.id for node in ast.walk(key) if isinstance(node, ast.Name)

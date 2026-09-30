@@ -485,7 +485,8 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
     and 1.64, measured directly: `.open` is `None` under the default and `False` under `on_change="rerun"`.
   - **A lazy expander needs a key that varies, and a constant key is worse than none.** Measured on 1.60
     and re-measured on 1.62 and 1.64 under `AppTest`: two same-label stateful expanders raise
-    `StreamlitDuplicateElementId` and the page renders nothing; a shared constant key raises
+    `StreamlitDuplicateElementId` and the run stops there — what rendered above it stays, nothing below it
+    renders; a shared constant key raises
     `StreamlitDuplicateElementKey` instead; two distinct keys both render. Identity is the **parameter tuple,
     never the position** — an earlier version of this file said the opposite. The panel label is
     `name · N chars`, so two `search_listings` results of equal length collide; the preview's label is the
