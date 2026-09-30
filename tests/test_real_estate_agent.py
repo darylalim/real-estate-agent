@@ -15,6 +15,7 @@ import json
 import os
 import re
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -1696,6 +1697,113 @@ def test_each_entry_point_loads_dotenv_before_the_package() -> None:
         "streamlit_app.py now imports real_estate_agent directly; either move the "
         "import below load_dotenv() or assert the ordering here as main.py does"
     )
+
+
+def test_run_config_reaches_every_run_in_a_trace() -> None:
+    """A trace should say where it came from without anyone reading the transcript.
+
+    LangGraph already copies `thread_id` out of `configurable` into run metadata,
+    which is what groups a conversation in LangSmith's Threads view — measured on
+    langgraph 1.2.12, so `run_config` does not restate it. What nothing supplied
+    was the surface, the models, and whether the approval gate was in the stack:
+    before this, a CLI trace and a web trace of the same thread were
+    indistinguishable, and "was approval on when this draft was written?" had no
+    answer short of reading the code at that commit.
+
+    Runs a one-node graph under a local collecting tracer rather than asserting
+    on the dict, because the dict being right is not the claim — the claim is
+    that LangChain carries it onto the root run *and* down to nested runs, which
+    is what makes a subagent's tool call filterable by entry point. No LangSmith
+    client is involved: the tracer persists to a list, and conftest has tracing
+    off regardless.
+    """
+    from langchain_core.tracers.base import BaseTracer
+    from langchain_core.tracers.schemas import Run
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+
+    from real_estate_agent.config import DEFAULT_MODEL, SUBAGENT_MODEL, run_config
+
+    class Collector(BaseTracer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.runs: list[Run] = []
+
+        def _persist_run(self, run: Run) -> None:
+            self.runs.append(run)
+
+    # A dataclass rather than a TypedDict: ty 0.0.65 does not accept a local
+    # TypedDict for langgraph's `StateLike` bound. pydantic's BaseModel also
+    # type-checks, but only arrives here transitively.
+    @dataclass
+    class State:
+        n: int
+
+    builder = StateGraph(State)
+    builder.add_node("step", lambda state: {"n": state.n + 1})
+    builder.add_edge(START, "step")
+    builder.add_edge("step", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+
+    collector = Collector()
+    config = run_config("thread-under-test", entry_point="web", require_approval=True)
+    graph.invoke(State(n=0), config={**config, "callbacks": [collector]})
+
+    (root,) = collector.runs
+    assert "web" in (root.tags or [])
+    metadata = (root.extra or {}).get("metadata", {})
+    assert metadata["thread_id"] == "thread-under-test", (
+        "thread_id no longer reaches root-run metadata, so LangSmith cannot group "
+        "a conversation's turns into one thread -- put it in `metadata` explicitly"
+    )
+    assert metadata["entry_point"] == "web"
+    assert metadata["require_approval"] is True
+    assert metadata["model"] == DEFAULT_MODEL
+    assert metadata["subagent_model"] == SUBAGENT_MODEL
+    assert metadata["app_version"] == _pyproject()["project"]["version"]
+
+    (step,) = [child for child in root.child_runs if child.name == "step"]
+    assert "web" in (step.tags or [])
+    assert (step.extra or {}).get("metadata", {}).get("entry_point") == "web", (
+        "nested runs no longer inherit run metadata, so a subagent's tool call "
+        "cannot be filtered by where the conversation started"
+    )
+
+
+def test_both_entry_points_build_their_run_config_through_one_function() -> None:
+    """A second hand-written config is how the CLI and the web page drift apart.
+
+    They share a checkpoint database and a thread can move between them, so a
+    `configurable` dict literal in either file means one surface stops tagging
+    its traces the day `run_config` grows a field. Reads the tree: a literal
+    anywhere in the file fails, and each file must name its own entry point
+    rather than both claiming the same one.
+    """
+    for relative, expected in (("main.py", "cli"), ("app_pages/chat.py", "web")):
+        tree = ast.parse((PROJECT_ROOT / relative).read_text("utf-8"))
+        literals = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            and any(isinstance(key, ast.Constant) and key.value == "configurable" for key in node.keys)
+        ]
+        assert not literals, (
+            f"{relative}:{literals[0].lineno if literals else 0} builds a run config by "
+            "hand; call real_estate_agent.config.run_config so traces stay tagged"
+        )
+        entry_points = [
+            keyword.value.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "run_config"
+            for keyword in node.keywords
+            if keyword.arg == "entry_point" and isinstance(keyword.value, ast.Constant)
+        ]
+        assert entry_points == [expected], (
+            f"{relative} should call run_config(..., entry_point={expected!r}) exactly once; "
+            f"found {entry_points}"
+        )
 
 
 def test_the_suite_does_not_trace_to_langsmith() -> None:

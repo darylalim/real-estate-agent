@@ -190,6 +190,7 @@ def main() -> int:
         CHECKPOINT_DB,
         ensure_workspace,
         require_api_key,
+        run_config,
     )
 
     parser = argparse.ArgumentParser(description="Real estate agent on Deep Agents.")
@@ -218,7 +219,9 @@ def main() -> int:
             require_approval=args.require_approval, checkpointer=checkpointer
         )
         thread_id = args.thread or str(uuid.uuid4())
-        config = {"configurable": {"thread_id": thread_id}}
+        config = run_config(
+            thread_id, entry_point="cli", require_approval=args.require_approval
+        )
 
         # Resuming replays the stored messages through `stream_mode="values"`,
         # and `seen` starts empty in a new process — so without this the whole

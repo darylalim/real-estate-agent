@@ -21,7 +21,12 @@ from pathlib import Path
 import streamlit as st
 from langgraph.types import Command
 
-from real_estate_agent.config import DEFAULT_MODEL, SUBAGENT_MODEL, require_api_key
+from real_estate_agent.config import (
+    DEFAULT_MODEL,
+    SUBAGENT_MODEL,
+    require_api_key,
+    run_config,
+)
 from ui.agent_session import (
     get_agent,
     message_key,
@@ -205,7 +210,11 @@ with st.sidebar:
         st.caption(f"Specialists · `{SUBAGENT_MODEL}`")
 
 agent = get_agent(st.session_state.require_approval)
-config = {"configurable": {"thread_id": st.session_state.thread_id}}
+config = run_config(
+    st.session_state.thread_id,
+    entry_point="web",
+    require_approval=st.session_state.require_approval,
+)
 
 # One checkpoint read for both, not one each -- `get_state` deserialises the
 # whole message list every call, and this script reruns on every interaction.

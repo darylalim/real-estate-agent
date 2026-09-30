@@ -214,6 +214,18 @@ LangSmith. The `LANGSMITH_*` spellings take precedence where both are set —
 `tests/conftest.py` assigning the modern name is sufficient to keep the suite
 offline. Prefer the `LANGSMITH_*` names; don't assume the old ones are inert.
 
+**What a trace carries.** Both entry points build their run config through
+`run_config()` in `config.py`, so every trace is tagged `cli` or `web` and its
+root run's metadata records `entry_point`, `model`, `subagent_model`,
+`require_approval` and `app_version`. Tags and metadata are inherited by every
+nested subagent, model and tool run, so a metadata filter on
+`require_approval` finds every `save_draft` that ran with no gate in the stack.
+`thread_id` is not restated: LangGraph already copies it from `configurable`
+into metadata (measured on langgraph 1.2.12), which is what groups a
+conversation's turns in LangSmith's Threads view. A thread started in the CLI
+and continued in the browser stays one thread, each turn tagged with the
+surface it actually ran on.
+
 ## Development
 
 Three checks, all of which must pass. No API calls, no key required:
@@ -225,7 +237,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 81 tests, ~1.5s
+uv run pytest tests/ -q       # 83 tests, ~1.5s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```

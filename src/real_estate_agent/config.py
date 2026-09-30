@@ -31,7 +31,9 @@ package supplies the environment the way any other library expects.
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Any, Literal
 
 # parents[2] is correct for an editable src-layout checkout. Installed
 # non-editable it would resolve into site-packages, silently rooting the agent
@@ -61,6 +63,41 @@ DEFAULT_MODEL = os.getenv("REA_MODEL", "anthropic:claude-opus-5-5")
 # Subagents inherit the orchestrator's model unless overridden. Kept separate
 # so cost/latency tuning is a config change, not a code change.
 SUBAGENT_MODEL = os.getenv("REA_SUBAGENT_MODEL", DEFAULT_MODEL)
+
+
+def run_config(
+    thread_id: str, *, entry_point: Literal["cli", "web"], require_approval: bool
+) -> dict[str, Any]:
+    """The LangGraph run config both entry points pass to ``agent.stream``.
+
+    ``thread_id`` needs no help to reach LangSmith: LangGraph copies every
+    ``configurable`` key into the root run's metadata, which is what groups a
+    conversation in the Threads view. What it cannot supply is where a run came
+    from and how it was built, and those are the questions a trace gets opened
+    to answer — which surface, which models, and whether the approval gate was
+    in the stack when a ``save_draft`` went through. Tags and metadata set here
+    are inherited by every nested subagent, model and tool run.
+
+    One function so the CLI and the web page cannot drift into tagging the same
+    conversation two different ways. The models reported are this module's
+    constants, which is what both entry points build with; a library caller
+    passing ``model=`` to ``build_agent`` should build its own config.
+    """
+    try:
+        app_version = version("real-estate-agent")
+    except PackageNotFoundError:
+        app_version = "unknown"
+    return {
+        "configurable": {"thread_id": thread_id},
+        "tags": [entry_point],
+        "metadata": {
+            "entry_point": entry_point,
+            "model": DEFAULT_MODEL,
+            "subagent_model": SUBAGENT_MODEL,
+            "require_approval": require_approval,
+            "app_version": app_version,
+        },
+    }
 
 
 def ensure_workspace() -> None:
