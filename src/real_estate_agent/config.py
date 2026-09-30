@@ -56,7 +56,7 @@ CHECKPOINT_DB = WORKSPACE_DIR / "checkpoints.db"
 # "anthropic" when there is no ":", which is the right guess for exactly one
 # provider. A bare "gpt-4o" makes it demand ANTHROPIC_API_KEY and never check
 # OPENAI_API_KEY — measured.
-DEFAULT_MODEL = os.getenv("REA_MODEL", "anthropic:claude-opus-5")
+DEFAULT_MODEL = os.getenv("REA_MODEL", "anthropic:claude-opus-5-5")
 
 # Subagents inherit the orchestrator's model unless overridden. Kept separate
 # so cost/latency tuning is a config change, not a code change.

@@ -863,7 +863,7 @@ def test_planning_middleware_is_pinned_because_it_is_not_automatic(monkeypatch) 
 
     def build(middleware):
         return create_deep_agent(
-            model="anthropic:claude-opus-5",
+            model="anthropic:claude-opus-5-5",
             system_prompt="construction only",
             middleware=middleware,
             backend=FilesystemBackend(root_dir=PROJECT_ROOT, virtual_mode=True),

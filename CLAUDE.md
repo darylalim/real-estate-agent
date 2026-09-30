@@ -528,7 +528,7 @@ being written.
   duplicate registration is invisible to it. That case has its own test —
   `test_planning_middleware_is_pinned_because_it_is_not_automatic` builds the graph both ways and goes red
   if deepagents starts adding the middleware itself. It does **not** retire the re-verification above, and an
-  earlier version of this line wrongly said it did: the test hardcodes `model="anthropic:claude-opus-5"`
+  earlier version of this line wrongly said it did: the test hardcodes `model="anthropic:claude-opus-5-5"`
   rather than reading `DEFAULT_MODEL`, so the hazard this bullet exists for — a *different* model string
   resolving a different harness profile — is the one case it cannot see. Re-run the diff by hand when
   `REA_MODEL` changes, not only when deepagents does.

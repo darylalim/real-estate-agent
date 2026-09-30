@@ -197,7 +197,7 @@ one.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | Required. |
 | `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` / `LANGSMITH_PROJECT` | — | Recommended. Current names — use these. The legacy `LANGCHAIN_*` spellings still work as fallbacks (see below). |
-| `REA_MODEL` | `anthropic:claude-opus-5` | Orchestrator. Keep the `provider:model` prefix: `require_api_key()` reads it to decide which key to demand, and assumes Anthropic without one. |
+| `REA_MODEL` | `anthropic:claude-opus-5-5` | Orchestrator. Keep the `provider:model` prefix: `require_api_key()` reads it to decide which key to demand, and assumes Anthropic without one. |
 | `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
 
 **On the legacy `LANGCHAIN_*` names.** An earlier version of this table said they

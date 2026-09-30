@@ -132,6 +132,6 @@ set +f
 [ "$live" -eq 1 ] || exit 0
 
 model=$(grep -sE '^REA_MODEL=' "${CLAUDE_PROJECT_DIR:-.}/.env" | cut -d= -f2-)
-model=${model:-anthropic:claude-opus-5}
+model=${model:-anthropic:claude-opus-5-5}
 
 ask "Reaches the agent live against ${model} — real billable calls fanning out to four specialists. Every test in this repo is offline; main.py and the Streamlit app are the only ways to spend money. Serving the app does not call the model, but the first prompt typed into its Chat page does, and no hook sees that."
