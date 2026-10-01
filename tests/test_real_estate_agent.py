@@ -971,6 +971,290 @@ def test_eval_scenarios_name_real_specialists_and_tools(
     assert f"fewer than {MIN_COMPS} comps" in analyst.get("system_prompt", "")
 
 
+def _eval_example(stem: str, scenario: str) -> dict[str, Any]:
+    """One committed example's reference outputs, by scenario id."""
+    examples = json.loads(
+        (PROJECT_ROOT / "evals" / "datasets" / f"{stem}.json").read_text(encoding="utf-8")
+    )
+    return next(e for e in examples if e["metadata"]["scenario"] == scenario)
+
+
+def _eval_run(
+    answer: str = "",
+    *calls: tuple[str, str, dict[str, Any], str | None],
+) -> dict[str, Any]:
+    """A captured run, shaped as `evals.target.capture` returns it."""
+    tool_calls: list[dict[str, Any]] = [
+        {"agent": agent, "name": name, "args": args, "status": status}
+        for agent, name, args, status in calls
+    ]
+    delegations = [
+        call["args"]["subagent_type"]
+        for call in tool_calls
+        if call["name"] == "task" and call["agent"] == "real-estate-agent"
+    ]
+    return {"answer": answer, "delegations": delegations, "tool_calls": tool_calls}
+
+
+def _task(subagent: str) -> tuple[str, str, dict[str, Any], str | None]:
+    return ("real-estate-agent", "task", {"subagent_type": subagent}, "success")
+
+
+def test_the_eval_target_captures_the_specialists_tool_calls() -> None:
+    """Drives the real graph with a scripted model, so no network and no key.
+
+    The point of the target is what the checkpoint does *not* hold: measured on
+    deepagents 0.7.21, the state that `stream_mode="values"` replays carries the
+    orchestrator's messages only, and a specialist's `search_listings` never
+    appears in it. Capturing from that state is the obvious implementation and
+    it would score every trajectory check as a miss. This asserts the
+    specialists' calls arrive, attributed to the right agent, with the status
+    of their results -- a permission denial included.
+    """
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    from evals.evaluators import forbidden_tools_avoided, required_tools_called
+    from evals.target import capture
+    from real_estate_agent.agent import build_agent
+    from real_estate_agent.config import run_config
+
+    class Scripted(GenericFakeChatModel):
+        """Replays its messages in order, whoever asks; tools are ignored."""
+
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+            return self
+
+    def call(name: str, content: Any = "", **args: Any) -> AIMessage:
+        return AIMessage(content, tool_calls=[{"name": name, "args": args, "id": f"call-{name}"}])
+
+    model = Scripted(
+        messages=iter(
+            [
+                call("task", description="find homes", subagent_type="property-search"),
+                call("search_listings", city="Hilo", min_beds=3, max_price=600_000),
+                AIMessage("specialist: MLS-1085 matches"),
+                # Content blocks, as Anthropic returns them, beside a tool call.
+                call(
+                    "task",
+                    [{"type": "text", "text": "orchestrator's "}, {"type": "text", "text": "last words"}],
+                    description="save notes",
+                    subagent_type="client-liaison",
+                ),
+                call("write_file", file_path="/src/notes.md", content="notes"),
+                AIMessage("specialist: could not write"),
+                # The orchestrator ends without text. The specialist spoke last,
+                # and must still not be graded as the reply.
+                AIMessage(""),
+            ]
+        )
+    )
+    agent = build_agent(model=cast(Any, model), subagent_model=cast(Any, model))
+    config = run_config("eval-under-test", entry_point="eval", require_approval=False)
+    outputs = capture(agent, "Find 3-bed homes in Hilo under $600k", config)
+
+    assert outputs["answer"] == "orchestrator's last words", (
+        "the reply is the orchestrator's last text, never a specialist's"
+    )
+    assert outputs["delegations"] == ["property-search", "client-liaison"]
+    assert [(c["agent"], c["name"], c["status"]) for c in outputs["tool_calls"]] == [
+        ("real-estate-agent", "task", "success"),
+        ("property-search", "search_listings", "success"),
+        ("real-estate-agent", "task", "success"),
+        ("client-liaison", "write_file", "error"),
+    ]
+    # And the shape is what the graders read.
+    reference = _eval_example("scenarios", "search-hilo-3bed-under-600k")["outputs"]
+    assert required_tools_called(outputs, reference)["score"] == 1
+    assert forbidden_tools_avoided(outputs, reference)["score"] == 1
+
+
+def test_the_eval_target_refuses_a_workspace_outside_the_temp_dir() -> None:
+    """The target empties the workspace before every example.
+
+    Against this checkout that is `workspace/` -- drafts, documents, and every
+    thread's checkpoint. `evals.run_experiments` points `REA_PROJECT_ROOT` at a
+    temp root first; anything else calling `make_target` must be refused at
+    construction, before an example runs, not after one has.
+    """
+    from evals.target import make_target
+
+    with pytest.raises(RuntimeError, match="Refusing to evaluate"):
+        make_target(object())
+
+
+def test_the_eval_graders_score_known_runs() -> None:
+    """Each code grader on a run it should pass and one it should fail.
+
+    `None` is asserted as deliberately as 0 and 1: a grader that scores an
+    inapplicable example as a pass inflates every average, silently.
+    """
+    from evals.evaluators import (
+        delegation_order,
+        draft_saved,
+        figures_stated,
+        forbidden_tools_avoided,
+        listing_ids_match,
+        required_tools_called,
+    )
+
+    hilo = _eval_example("scenarios", "search-hilo-3bed-under-600k")["outputs"]
+    ids = " ".join(hilo["expected_listing_ids"])
+    assert listing_ids_match(_eval_run(ids), hilo)["score"] == 1
+    # Five of six, plus one that is not a match: 5 / 7.
+    partial = listing_ids_match(_eval_run(f"{ids.rsplit(' ', 1)[0]} MLS-1001"), hilo)
+    assert partial["score"] == round(5 / 7, 3)
+    assert "MLS-1001" in partial["comment"]
+    empty = _eval_example("scenarios", "search-honolulu-under-300k-empty")["outputs"]
+    assert listing_ids_match(_eval_run("MLS-1069 if you stretch"), empty)["score"] is None
+
+    market = _eval_example("scenarios", "market-hilo")["outputs"]
+    assert market["market_reading"] == "balanced", "this case depends on the fixture"
+    good = "Hilo sits at 5.0 months of inventory, which is a balanced market."
+    assert figures_stated(_eval_run(good), market)["score"] == 1
+    assert figures_stated(_eval_run("Hilo is a seller's market."), market)["score"] == 0
+
+    cma = _eval_example("scenarios", "cma-listed-below-comps")["outputs"]
+    low, high = cma["indicated_value_range"]["low"], cma["indicated_value_range"]["high"]
+    answer = f"{cma['comps_at_reference_search']} comparable sales put it at ${low:,} to ${high / 1e6:.2f}M."
+    at_defaults = ("market-analyst", "find_comparables", {"listing_id": cma["subject"]}, "success")
+    assert figures_stated(_eval_run(answer, at_defaults), cma)["score"] == 1
+    narrower = ("market-analyst", "find_comparables", {"listing_id": cma["subject"], "radius_miles": 1.0}, "success")
+    assert figures_stated(_eval_run(answer, narrower), cma)["score"] is None
+    thin = _eval_example("scenarios", "cma-thin-comp-set")["outputs"]
+    assert figures_stated(_eval_run("anything"), thin)["score"] is None
+
+    lead = _eval_example("scenarios", "lead-budget-clears-nothing")["outputs"]
+    assert (lead["tier"], lead["listings_within_budget_and_requirements"]) == ("cool", 0)
+    answer = "A cool lead for now: none of the 10 qualifying listings is within budget."
+    assert figures_stated(_eval_run(answer), lead)["score"] == 1
+
+    workflow = _eval_example("scenarios", "workflow-cma-then-offer-email")["outputs"]
+    saved = ("client-liaison", "save_draft", {}, "success")
+    assert draft_saved(_eval_run("", saved), workflow)["score"] == 1
+    assert draft_saved(_eval_run("", (*saved[:3], "error")), workflow)["score"] == 0
+    assert draft_saved(_eval_run(""), hilo)["score"] is None
+
+    analyst, liaison = _task("market-analyst"), _task("client-liaison")
+    assert delegation_order(_eval_run("", analyst, analyst, liaison), workflow)["score"] == 1
+    assert delegation_order(_eval_run("", liaison, analyst), workflow)["score"] == 0
+    stray = delegation_order(_eval_run("", analyst, _task("property-search"), liaison), workflow)
+    assert stray["score"] == 0
+    assert "property-search" in stray["comment"]
+
+    refetch = ("property-search", "get_listing", {"listing_id": "MLS-1085"}, "success")
+    assert forbidden_tools_avoided(_eval_run("", refetch), hilo)["score"] == 0
+    documents = _eval_example("scenarios", "documents-review-purchase-agreement")["outputs"]
+    assert required_tools_called(_eval_run(""), documents)["score"] == 0
+    assert forbidden_tools_avoided(_eval_run(""), documents)["score"] is None
+
+
+def test_the_eval_rubric_is_all_or_nothing_and_refuses_a_short_verdict_list() -> None:
+    """The AI grader, with a stub judge in place of the model.
+
+    A short verdict list scores None rather than being zipped short, which
+    would drop the trailing requirements unread -- and on a guardrail the
+    trailing requirement is as likely as any to be the one that was broken.
+    """
+    from langchain_core.runnables import RunnableLambda
+
+    from evals.evaluators import make_rubric
+
+    seen: list[Any] = []
+
+    def judge_returning(*met: bool) -> Any:
+        def respond(messages: Any) -> dict[str, Any]:
+            seen.append(messages)
+            return {"verdicts": [{"reasoning": "because", "met": value} for value in met]}
+
+        return RunnableLambda(respond)
+
+    rail = _eval_example("guardrails", "no-send-capability")
+    inputs, reference = rail["inputs"], rail["outputs"]
+    lines = len(reference["must"]) + len(reference["must_not"])
+    run = _eval_run("Saved as a draft; not sent.", ("client-liaison", "save_draft", {"to": "kai@example.com"}, "success"))
+
+    assert make_rubric(judge_returning(*[True] * lines))(inputs, run, reference)["score"] == 1
+    broken = make_rubric(judge_returning(*[True] * (lines - 1), False))(inputs, run, reference)
+    assert broken["score"] == 0
+    assert reference["must_not"][-1] in broken["comment"]
+    short = make_rubric(judge_returning(True))(inputs, run, reference)
+    assert short["score"] is None
+    assert f"1 verdicts for {lines}" in short["comment"]
+    # The judge sees the tool log, not just the reply: "saved a draft" is a fact
+    # about a call, and a reply can claim it without one.
+    assert "save_draft" in seen[-1][-1][1]
+
+    # Scenario flags become rubric lines; no flags, no judge call at all.
+    empty = _eval_example("scenarios", "search-honolulu-under-300k-empty")
+    calls_before = len(seen)
+    assert make_rubric(judge_returning(True, True))(empty["inputs"], run, empty["outputs"])["score"] == 1
+    hilo = _eval_example("scenarios", "search-hilo-3bed-under-600k")
+    assert make_rubric(judge_returning())(hilo["inputs"], run, hilo["outputs"])["score"] is None
+    assert len(seen) == calls_before + 1
+
+
+def test_every_eval_flag_has_a_grader() -> None:
+    """A flag the builder writes and no grader reads is a silent pass.
+
+    The scenarios dataset carries behaviour flags -- `must_label_as_rough`,
+    `must_not_claim_sent` -- that only mean something if a grader turns them
+    into a check. Adding one to the builder without teaching the graders about
+    it uploads cleanly and is scored by nothing.
+    """
+    from evals.build_datasets import build_all
+    from evals.evaluators import _FLAG_REQUIREMENTS
+
+    flags = {
+        key
+        for example in build_all()["scenarios"]
+        for key, value in example["outputs"].items()
+        if isinstance(value, bool)
+    }
+    assert flags, "the scenarios dataset carries no flags, so this checks nothing"
+    # `draft_required` is read by `draft_saved`; every other flag is a rubric line.
+    assert flags - {"draft_required"} <= set(_FLAG_REQUIREMENTS)
+
+
+def test_the_eval_runner_isolates_its_workspace_before_importing_the_package() -> None:
+    """The runner is an entry point, with `main.py`'s import-order constraint and one more.
+
+    `config.py` evaluates `PROJECT_ROOT` at import, so `REA_PROJECT_ROOT` must be
+    in the environment before anything imports the package -- and `evals.*`
+    counts, because those modules import it in turn, which the `real_estate_agent`
+    match in `_package_imports` alone cannot see. Get it wrong and the target's
+    construction-time guard is all that stands between an eval run and the real
+    `workspace/`. The `.env` load must come first too, or a `REA_PROJECT_ROOT`
+    in `.env` would overwrite the temp root.
+    """
+    tree = ast.parse((PROJECT_ROOT / "evals" / "run_experiments.py").read_text("utf-8"))
+    imports = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and (node.module or "").split(".")[0] in {"real_estate_agent", "evals"}
+    ]
+    assert imports, "the runner imports the package somewhere, or this checks nothing"
+    assert not [node for node in imports if node in tree.body], (
+        "a module-scope package import runs before main() can set REA_PROJECT_ROOT"
+    )
+    root_writes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "REA_PROJECT_ROOT"
+            for target in node.targets
+        )
+    ]
+    calls = _dotenv_calls(tree)
+    assert calls and root_writes
+    first_import = min(node.lineno for node in imports)
+    assert max(call.lineno for call in calls) < min(node.lineno for node in root_writes) < first_import
+
+
 # --- streamlit app --------------------------------------------------------
 #
 # `streamlit_app.py` is a second consumer of the package, alongside `main.py`,
@@ -1840,16 +2124,21 @@ def test_run_config_reaches_every_run_in_a_trace() -> None:
     )
 
 
-def test_both_entry_points_build_their_run_config_through_one_function() -> None:
+def test_every_entry_point_builds_its_run_config_through_one_function() -> None:
     """A second hand-written config is how the CLI and the web page drift apart.
 
     They share a checkpoint database and a thread can move between them, so a
     `configurable` dict literal in either file means one surface stops tagging
     its traces the day `run_config` grows a field. Reads the tree: a literal
     anywhere in the file fails, and each file must name its own entry point
-    rather than both claiming the same one.
+    rather than two claiming the same one. The eval target is held to it too:
+    an untagged scored run reads as real traffic in the project's traces.
     """
-    for relative, expected in (("main.py", "cli"), ("app_pages/chat.py", "web")):
+    for relative, expected in (
+        ("main.py", "cli"),
+        ("app_pages/chat.py", "web"),
+        ("evals/target.py", "eval"),
+    ):
         tree = ast.parse((PROJECT_ROOT / relative).read_text("utf-8"))
         literals = [
             node

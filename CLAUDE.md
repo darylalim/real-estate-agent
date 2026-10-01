@@ -32,12 +32,13 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 85 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 91 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
 
 uv run python -m evals.build_datasets            # regenerate evals/datasets/*.json from the mock (offline)
+uv run python -m evals.run_experiments --limit 2 # LIVE + billed: run the agent over uploaded datasets, grade in LangSmith
 
 uvx ty@0.0.65 check                              # type check — pinned; not a declared dependency
 uvx ruff@0.16.1 check .                          # lint — pinned; rule set in pyproject.toml
@@ -70,9 +71,9 @@ the suite green today and breaks it the day that transitive path changes — mea
 -c "import langsmith.utils"` still imports 0.14.2. A direct import gets a direct declaration.
 `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
 
-**`ruff check` yes, `ruff format` no.** The formatter would rewrite 10 of the 25 Python files — line-wrapping
+**`ruff check` yes, `ruff format` no.** The formatter would rewrite 10 of the 28 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
-reports a total of 30, not 25: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
+reports a total of 33, not 28: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
 this file, and the three `SKILL.md` files are in its denominator. All 10 rewrites are `.py`.) The two
 denominators read 14 and 19 when first written and drifted in silence as the repo grew, so
 `test_documented_file_counts_match_the_tree` now gates them — a caveat telling the next reader to re-derive
@@ -226,7 +227,7 @@ the enforcement that matters lives in `pyproject.toml`, `scripts/check.sh`, `tes
 
 | Hook | Event | Does |
 |---|---|---|
-| `confirm-live-run.sh` | PreToolUse(Bash) | Asks before `main.py` and `streamlit run` — the two commands that reach the model |
+| `confirm-live-run.sh` | PreToolUse(Bash) | Asks before `main.py` and `streamlit run`. The third command that reaches the model, `evals.run_experiments`, asks for itself — with a cost estimate the hook could not give |
 | `done-gate.sh` | Stop | `scripts/check.sh`, unconditionally |
 
 **Three hooks and a shared library were deleted on 2026-08-25.** Each was a decision rather than a tidy-up, and

@@ -66,9 +66,12 @@ SUBAGENT_MODEL = os.getenv("REA_SUBAGENT_MODEL", DEFAULT_MODEL)
 
 
 def run_config(
-    thread_id: str, *, entry_point: Literal["cli", "web"], require_approval: bool
+    thread_id: str,
+    *,
+    entry_point: Literal["cli", "web", "eval"],
+    require_approval: bool,
 ) -> dict[str, Any]:
-    """The LangGraph run config both entry points pass to ``agent.stream``.
+    """The LangGraph run config every entry point passes to ``agent.stream``.
 
     ``thread_id`` needs no help to reach LangSmith: LangGraph copies every
     ``configurable`` key into the root run's metadata, which is what groups a
@@ -79,8 +82,10 @@ def run_config(
     are inherited by every nested subagent, model and tool run.
 
     One function so the CLI and the web page cannot drift into tagging the same
-    conversation two different ways. The models reported are this module's
-    constants, which is what both entry points build with; a library caller
+    conversation two different ways. ``eval`` is the experiment runner in
+    ``evals/``, tagged so a scored run is never mistaken for real traffic. The
+    models reported are this module's constants, which is what every entry
+    point builds with; a library caller
     passing ``model=`` to ``build_agent`` should build its own config.
     """
     try:

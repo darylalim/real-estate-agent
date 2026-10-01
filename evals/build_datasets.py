@@ -2,19 +2,25 @@
 
     uv run python -m evals.build_datasets      # rewrite evals/datasets/*.json
 
-Three datasets, one per kind of question an evaluator can ask:
+Two datasets:
 
-- **final_response** -- did the answer state the right facts? Every expected
-  value is computed here by invoking the agent's own tools against
-  ``MockListingsProvider``, never copied from what a model once said. The mock
-  is seeded and its clock is frozen, so these are ground truth, not a snapshot
-  of one run.
-- **trajectory** -- did the orchestrator route to the right specialist, and did
-  that specialist call the right tools? Same scenarios as above, projected onto
-  delegations and tool names.
+- **scenarios** -- each example carries two kinds of reference side by side.
+  *Facts*: did the answer state the right listing ids, months of inventory,
+  comp count, value range, lead tier? Every expected value is computed here by
+  invoking the agent's own tools against ``MockListingsProvider``, never copied
+  from what a model once said; the mock is seeded and its clock is frozen, so
+  these are ground truth, not a snapshot of one run. *Trajectory*: did the
+  orchestrator delegate to the right specialist, and did that specialist call
+  the right tools?
 - **guardrails** -- did it refuse, or stop short, where the README says it
   must? A rubric for an LLM judge, since "did not imply it sent the email" has
   no structural check.
+
+Facts and trajectory share one example rather than living in two datasets, and
+that is a cost decision, not a tidiness one. A LangSmith experiment runs one
+dataset, so two datasets over the same queries means every query is answered
+twice -- and every answer here is a live multi-agent run. One example, one run,
+graded both ways.
 
 The JSON is committed, and ``test_eval_datasets_match_the_mock`` regenerates it
 in memory and diffs. That is the point of building rather than hand-writing it:
@@ -55,19 +61,14 @@ MIN_COMPS = 3
 
 # (LangSmith dataset name, description), keyed by the local file stem.
 DATASETS: dict[str, tuple[str, str]] = {
-    "final_response": (
-        "real-estate-agent: final response",
+    "scenarios": (
+        "real-estate-agent: scenarios",
         (
-            "Facts the final answer must state. Expected values are computed from "
-            f"the agent's own tools against MockListingsProvider (seed {_SEED}, "
-            f"frozen today {_TODAY.isoformat()}) at tool-default parameters."
-        ),
-    ),
-    "trajectory": (
-        "real-estate-agent: trajectory",
-        (
-            "Which specialists the orchestrator must delegate to, in order, and "
-            "which tools those specialists must and must not call."
+            "Facts the final answer must state, plus which specialists the "
+            "orchestrator must delegate to and which tools they must and must not "
+            "call. Expected facts are computed from the agent's own tools against "
+            f"MockListingsProvider (seed {_SEED}, frozen today "
+            f"{_TODAY.isoformat()}) at tool-default parameters."
         ),
     ),
     "guardrails": (
@@ -137,9 +138,12 @@ class _Truth:
         truth: dict[str, Any] = {
             "subject": listing_id,
             "list_price": list_price,
+            # Every search parameter, so `figures_stated` can tell an agent that
+            # chose a different search from one that misreported this one.
             "reference_search": {
-                key: result["search"][key]
-                for key in ("radius_miles", "months_back", "max_sqft_delta_pct")
+                key: value
+                for key, value in result["search"].items()
+                if key != "comps_found"
             },
             "comps_at_reference_search": comps,
             "must_label_as_rough": comps < MIN_COMPS,
@@ -178,7 +182,7 @@ class _Truth:
 
 @dataclass(frozen=True)
 class Scenario:
-    """One user request, projected into the final-response and trajectory sets."""
+    """One user request, with the facts and the route its answer should take."""
 
     id: str
     query: str
@@ -188,8 +192,8 @@ class Scenario:
     # Tools some delegated specialist must call at least once.
     required_tools: tuple[str, ...]
     forbidden_tools: tuple[str, ...] = ()
-    # None means trajectory-only: the right answer depends on files outside
-    # the repo (the gitignored documents folder), so there is no fact to check.
+    # None means only the route is checked: the right answer depends on files
+    # outside the repo (the gitignored documents folder), so there is no fact.
     truth: Callable[[_Truth], dict[str, Any]] | None = None
 
 
@@ -426,37 +430,32 @@ def build_all() -> dict[str, list[dict[str, Any]]]:
         raise ValueError("MLS-9999 exists in the mock; pick an id that does not.")
     truth = _Truth(provider)
 
-    final_response: list[dict[str, Any]] = []
-    trajectory: list[dict[str, Any]] = []
+    scenarios: list[dict[str, Any]] = []
     # Not traced. Each invoke would otherwise be a LangSmith *root* run --
     # one billable trace apiece, the defect `tests/conftest.py` exists for --
     # if the caller's environment happens to have tracing on.
     with tracing_context(enabled=False):
         for scenario in SCENARIOS:
-            metadata = {"scenario": scenario.id, "category": scenario.category}
-            inputs = {"query": scenario.query}
-            trajectory.append(
+            facts = scenario.truth(truth) if scenario.truth is not None else {}
+            scenarios.append(
                 {
-                    "inputs": inputs,
+                    "inputs": {"query": scenario.query},
+                    # Flat: fact keys and route keys never collide, and each
+                    # evaluator reads only its own, scoring "not applicable"
+                    # when they are absent.
                     "outputs": {
+                        "category": scenario.category,
+                        **facts,
                         "expected_delegations": list(scenario.delegations),
                         "required_tools": list(scenario.required_tools),
                         "forbidden_tools": list(scenario.forbidden_tools),
                     },
-                    "metadata": metadata,
+                    "metadata": {
+                        "scenario": scenario.id,
+                        "category": scenario.category,
+                    },
                 }
             )
-            if scenario.truth is not None:
-                final_response.append(
-                    {
-                        "inputs": inputs,
-                        "outputs": {
-                            "category": scenario.category,
-                            **scenario.truth(truth),
-                        },
-                        "metadata": metadata,
-                    }
-                )
 
     guardrails = [
         {
@@ -472,11 +471,7 @@ def build_all() -> dict[str, list[dict[str, Any]]]:
         for rail in GUARDRAILS
     ]
 
-    return {
-        "final_response": final_response,
-        "trajectory": trajectory,
-        "guardrails": guardrails,
-    }
+    return {"scenarios": scenarios, "guardrails": guardrails}
 
 
 def render(examples: list[dict[str, Any]]) -> str:

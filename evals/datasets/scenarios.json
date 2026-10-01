@@ -17,6 +17,15 @@
         "MLS-1085",
         "MLS-1104",
         "MLS-1105"
+      ],
+      "expected_delegations": [
+        "property-search"
+      ],
+      "required_tools": [
+        "search_listings"
+      ],
+      "forbidden_tools": [
+        "get_listing"
       ]
     },
     "metadata": {
@@ -37,6 +46,15 @@
       },
       "expected_listing_ids": [
         "MLS-1069"
+      ],
+      "expected_delegations": [
+        "property-search"
+      ],
+      "required_tools": [
+        "search_listings"
+      ],
+      "forbidden_tools": [
+        "get_listing"
       ]
     },
     "metadata": {
@@ -56,7 +74,14 @@
       },
       "expected_listing_ids": [],
       "must_state_no_matches": true,
-      "must_name_relaxed_constraint": true
+      "must_name_relaxed_constraint": true,
+      "expected_delegations": [
+        "property-search"
+      ],
+      "required_tools": [
+        "search_listings"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "search-honolulu-under-300k-empty",
@@ -76,7 +101,14 @@
       "closed_sales": 24,
       "closed_sales_window_months": 12,
       "median_active_price": 520500,
-      "median_closed_price": 474000
+      "median_closed_price": 474000,
+      "expected_delegations": [
+        "market-analyst"
+      ],
+      "required_tools": [
+        "market_statistics"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "market-hilo",
@@ -96,7 +128,14 @@
       "closed_sales": 52,
       "closed_sales_window_months": 12,
       "median_active_price": 1042000,
-      "median_closed_price": 1146000
+      "median_closed_price": 1146000,
+      "expected_delegations": [
+        "market-analyst"
+      ],
+      "required_tools": [
+        "market_statistics"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "market-honolulu",
@@ -114,7 +153,8 @@
       "reference_search": {
         "radius_miles": 1.5,
         "months_back": 6,
-        "max_sqft_delta_pct": 0.3
+        "max_sqft_delta_pct": 0.3,
+        "same_property_type": true
       },
       "comps_at_reference_search": 8,
       "must_label_as_rough": false,
@@ -123,7 +163,14 @@
         "midpoint": 1343096,
         "high": 1554456
       },
-      "list_price_vs_midpoint_pct": -18.6
+      "list_price_vs_midpoint_pct": -18.6,
+      "expected_delegations": [
+        "market-analyst"
+      ],
+      "required_tools": [
+        "find_comparables"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "cma-listed-below-comps",
@@ -141,7 +188,8 @@
       "reference_search": {
         "radius_miles": 1.5,
         "months_back": 6,
-        "max_sqft_delta_pct": 0.3
+        "max_sqft_delta_pct": 0.3,
+        "same_property_type": true
       },
       "comps_at_reference_search": 2,
       "must_label_as_rough": true,
@@ -150,7 +198,14 @@
         "midpoint": 291076,
         "high": 324850
       },
-      "list_price_vs_midpoint_pct": -11.7
+      "list_price_vs_midpoint_pct": -11.7,
+      "expected_delegations": [
+        "market-analyst"
+      ],
+      "required_tools": [
+        "find_comparables"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "cma-thin-comp-set",
@@ -168,12 +223,20 @@
       "reference_search": {
         "radius_miles": 1.5,
         "months_back": 6,
-        "max_sqft_delta_pct": 0.3
+        "max_sqft_delta_pct": 0.3,
+        "same_property_type": true
       },
       "comps_at_reference_search": 0,
       "must_label_as_rough": true,
       "indicated_value_range": null,
-      "list_price_vs_midpoint_pct": null
+      "list_price_vs_midpoint_pct": null,
+      "expected_delegations": [
+        "market-analyst"
+      ],
+      "required_tools": [
+        "find_comparables"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "cma-no-comps",
@@ -191,7 +254,14 @@
       "active_listings_in_city": 10,
       "listings_meeting_requirements": 8,
       "listings_within_budget_and_requirements": 6,
-      "listings_within_budget_including_fees": 6
+      "listings_within_budget_including_fees": 6,
+      "expected_delegations": [
+        "client-liaison"
+      ],
+      "required_tools": [
+        "qualify_lead"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "lead-hot-hilo",
@@ -209,7 +279,14 @@
       "active_listings_in_city": 12,
       "listings_meeting_requirements": 10,
       "listings_within_budget_and_requirements": 0,
-      "listings_within_budget_including_fees": 0
+      "listings_within_budget_including_fees": 0,
+      "expected_delegations": [
+        "client-liaison"
+      ],
+      "required_tools": [
+        "qualify_lead"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "lead-budget-clears-nothing",
@@ -227,7 +304,8 @@
       "reference_search": {
         "radius_miles": 1.5,
         "months_back": 6,
-        "max_sqft_delta_pct": 0.3
+        "max_sqft_delta_pct": 0.3,
+        "same_property_type": true
       },
       "comps_at_reference_search": 8,
       "must_label_as_rough": false,
@@ -238,11 +316,39 @@
       },
       "list_price_vs_midpoint_pct": 7.9,
       "draft_required": true,
-      "must_not_claim_sent": true
+      "must_not_claim_sent": true,
+      "expected_delegations": [
+        "market-analyst",
+        "client-liaison"
+      ],
+      "required_tools": [
+        "find_comparables",
+        "save_draft"
+      ],
+      "forbidden_tools": []
     },
     "metadata": {
       "scenario": "workflow-cma-then-offer-email",
       "category": "workflow"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Review the purchase agreement in my documents folder and flag anything unusual."
+    },
+    "outputs": {
+      "category": "documents",
+      "expected_delegations": [
+        "document-reviewer"
+      ],
+      "required_tools": [
+        "list_documents"
+      ],
+      "forbidden_tools": []
+    },
+    "metadata": {
+      "scenario": "documents-review-purchase-agreement",
+      "category": "documents"
     }
   }
 ]

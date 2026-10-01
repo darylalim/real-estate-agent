@@ -237,7 +237,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 85 tests, ~1.5s
+uv run pytest tests/ -q       # 91 tests, ~1.5s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -256,30 +256,50 @@ report a different result on identical source. ruff enforces its own pin via
 so that one is on you. `ruff format` is deliberately **not** used here — see
 `CLAUDE.md`.
 
-### Evaluation datasets
+### Evaluations
 
-`evals/datasets/` holds three LangSmith-ready datasets, built offline from the
-mock:
+`evals/` grades the agent in LangSmith against two datasets, built offline from
+the mock:
 
-| File | Asks |
+| Dataset | Asks |
 |---|---|
-| `final_response.json` | Did the answer state the right facts — listing ids, months of inventory, comp count, value range, lead tier? |
-| `trajectory.json` | Did the orchestrator delegate to the right specialist, in order, and did it call the right tools? |
+| `scenarios.json` | Did the answer state the right facts — listing ids, months of inventory, comp count, value range, lead tier — and did the orchestrator delegate to the right specialist, which then called the right tools? |
 | `guardrails.json` | Fair housing, no send, write containment, checkpoint privacy, no invented listings, no legal opinions, no pressure tactics |
 
-Expected values are **computed, not recorded**: `evals/build_datasets.py` runs
+Expected facts are **computed, not recorded**: `evals/build_datasets.py` runs
 the agent's own tools against `MockListingsProvider`, so they are ground truth
 for the seeded dataset rather than a snapshot of what one model run said. The
 JSON is committed for review, and `test_eval_datasets_match_the_mock` fails the
-moment a mock change moves an expected answer.
+moment a mock change moves an expected answer. Facts and route share one
+example so each query is answered once and graded both ways — a LangSmith
+experiment runs one dataset, and every answer here is a live multi-agent run.
+
+`evals/evaluators.py` holds the graders: code for anything a pattern can
+decide (cited ids, stated figures, delegation order, required and forbidden
+tools, a successful `save_draft`), and one AI grader on Claude Haiku 4.5 for
+what it cannot — the guardrail rubrics, and flags such as "presented a thin
+comp set as a rough indication". A grader that does not apply to an example
+scores `None`, never a pass, so a skipped check cannot lift an average.
 
 ```bash
-uv run python -m evals.build_datasets   # regenerate; prints the upload commands
+uv run python -m evals.build_datasets          # regenerate; prints the upload commands
+uv run python -m evals.run_experiments --limit 2   # LIVE and billed; asks first
 ```
 
 Building contacts nothing. Uploading is a separate step with the `langsmith`
 CLI and your API key. The CLI's own docs say an existing name is rejected, so a
-re-upload means deleting the old dataset first.
+re-upload means deleting the old dataset first. The runner then needs
+`ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY`, prints an estimate from the two
+measured CLI runs (about $0.17–$0.63 per example on Claude Opus 5.5), and
+asks before spending. It runs the agent in a throwaway project root holding a
+copy of `skills/`, emptied before each example and one example at a time —
+specialists read their own files back, so a shared workspace would leak one
+example's shortlist into the next.
+
+**The graders are tested offline only.** `capture` is exercised against the
+real graph with a scripted model, and every grader against hand-built runs; no
+live experiment has run yet, so how the AI grader and the number-matching
+patterns fare on real replies is unmeasured.
 
 ### CI
 
