@@ -186,6 +186,20 @@ def test_unknown_listing_returns_none(provider: MockListingsProvider) -> None:
     assert provider.get("MLS-does-not-exist") is None
 
 
+def test_price_per_sqft_names_the_price_it_divides(provider: MockListingsProvider) -> None:
+    """The label must be true, not merely present.
+
+    A sold record carries both `price` and `sold_price`; with no basis stated,
+    the analyst guessed list price in a live eval run and warned the client of
+    a defect that does not exist. So this checks the *named* field divides out
+    to `price_per_sqft`, on a sold listing and on one with no sale.
+    """
+    for status, basis in (("sold", "sold_price"), ("active", "price")):
+        record = provider.search(status=status, limit=1)[0].as_dict()
+        assert record["price_per_sqft_basis"] == basis
+        assert record["price_per_sqft"] == round(record[basis] / record["sqft"], 2)
+
+
 def test_comparables_are_sold_and_exclude_subject(provider: MockListingsProvider) -> None:
     """A CMA on active listings or on the subject itself would be wrong."""
     subject = _subject_with_comps(provider)

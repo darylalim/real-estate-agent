@@ -30,7 +30,15 @@ _PRICE_BAND = 50_000
 # page payload, so a listing `description` nobody can see still ships on every
 # row. Latitude and longitude are already on the map above, and
 # `effective_price` is a chart intermediate that duplicates `price`/`sold_price`.
-_NOT_IN_THE_TABLE = ["latitude", "longitude", "description", "effective_price"]
+# `price_per_sqft_basis` is a label for the model, which cannot see which of the
+# two price columns $/sqft divides; a reader has both columns beside it.
+_NOT_IN_THE_TABLE = [
+    "latitude",
+    "longitude",
+    "description",
+    "effective_price",
+    "price_per_sqft_basis",
+]
 
 # `column_config` does **not** reorder anything; only `column_order` does, and
 # without it the browser shows the frame's own order, which is `Listing`'s field

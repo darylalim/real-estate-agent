@@ -45,6 +45,15 @@ class Listing:
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["price_per_sqft"] = self.price_per_sqft
+        # Which price that divides. A sold record carries both `price` (the
+        # list price) and `sold_price`, and with the basis unstated the market
+        # analyst guessed list price -- measured in a live eval run -- then told
+        # the client the comp figures might be inflated by a defect that does
+        # not exist. JSON here is prompt surface; state it rather than leave it
+        # to inference.
+        payload["price_per_sqft_basis"] = (
+            "sold_price" if self.sold_price is not None else "price"
+        )
         return payload
 
 

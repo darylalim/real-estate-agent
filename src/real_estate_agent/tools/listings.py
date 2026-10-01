@@ -36,8 +36,10 @@ def make_listing_tools(provider: ListingsProvider) -> list[BaseTool]:
         omit a filter to leave that dimension unconstrained.
 
         Each match is returned as a complete listing record — every field
-        `get_listing` would give you, including price_per_sqft. Do not re-fetch
-        these results individually.
+        `get_listing` would give you, including price_per_sqft and
+        price_per_sqft_basis, the price field it divides (sold_price once a
+        listing has sold, else price). Do not re-fetch these results
+        individually.
 
         Args:
             city: City name, e.g. "Honolulu".
