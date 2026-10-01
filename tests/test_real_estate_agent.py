@@ -901,6 +901,76 @@ def test_subagents_carry_their_own_skills() -> None:
     assert by_name["client-liaison"]["skills"] == ["/skills/client-comms"]
 
 
+# --- evaluation datasets --------------------------------------------------
+#
+# `evals/datasets/*.json` is ground truth computed from the mock and committed so
+# it can be reviewed before upload. Both ways it goes wrong are silent: the mock
+# reshuffles and the JSON keeps scoring the agent against listings that moved,
+# or a specialist or tool is renamed and a trajectory check keeps passing on a
+# name that nothing emits any more.
+
+
+def test_eval_datasets_match_the_mock() -> None:
+    """The committed JSON is byte-for-byte what the builder produces today.
+
+    Changing the mock's draw count reshuffles every listing after the change
+    (see CLAUDE.md), and a stale `expected_listing_ids` then marks a correct
+    answer wrong in LangSmith, where nothing in this repo would ever see it.
+    """
+    from evals.build_datasets import DATASETS, DATASETS_DIR, build_all, render
+
+    built = build_all()
+    assert set(built) == set(DATASETS)
+    # An orphaned file would still be uploadable, and would never be regenerated.
+    assert {path.stem for path in DATASETS_DIR.glob("*.json")} == set(DATASETS)
+    for stem, examples in built.items():
+        committed = (DATASETS_DIR / f"{stem}.json").read_text(encoding="utf-8")
+        assert committed == render(examples), (
+            f"evals/datasets/{stem}.json is stale. Run `uv run python -m "
+            "evals.build_datasets` and review the diff: it is the agent's expected "
+            "answers moving, and any copy already uploaded to LangSmith is stale too."
+        )
+
+
+def test_eval_scenarios_name_real_specialists_and_tools(
+    provider: MockListingsProvider,
+) -> None:
+    """Every name a dataset asserts on is one the live graph can emit.
+
+    The forbidden-tool half is the one that fails quietly: a forbidden name that
+    no specialist holds can never be called, so the check passes on every run
+    and proves nothing — the same shape as a guard on a default-off condition.
+    Required tools are held to the stricter standard of belonging to a
+    specialist the scenario delegates to, or the scenario can never pass.
+    """
+    from evals.build_datasets import GUARDRAILS, MIN_COMPS, SCENARIOS
+    from real_estate_agent.subagents import build_subagents
+
+    subagents = build_subagents(
+        listing_tools=make_listing_tools(provider),
+        market_tools=make_market_tools(provider),
+        document_tools=make_document_tools(),
+        comms_tools=make_comms_tools(provider),
+    )
+    tools_of = {
+        sub["name"]: {tool.name for tool in sub.get("tools", ()) if isinstance(tool, BaseTool)}
+        for sub in subagents
+    }
+    every_tool = set().union(*tools_of.values())
+
+    for scenario in SCENARIOS:
+        assert set(scenario.delegations) <= set(tools_of), scenario.id
+        reachable = set().union(*(tools_of[name] for name in scenario.delegations))
+        assert set(scenario.required_tools) <= reachable, scenario.id
+        assert set(scenario.forbidden_tools) <= every_tool, scenario.id
+    for rail in GUARDRAILS:
+        assert {*rail.required_tools, *rail.forbidden_tools} <= every_tool, rail.id
+
+    # `MIN_COMPS` restates the analyst prompt's threshold by hand.
+    analyst = next(sub for sub in subagents if sub["name"] == "market-analyst")
+    assert f"fewer than {MIN_COMPS} comps" in analyst.get("system_prompt", "")
+
+
 # --- streamlit app --------------------------------------------------------
 #
 # `streamlit_app.py` is a second consumer of the package, alongside `main.py`,

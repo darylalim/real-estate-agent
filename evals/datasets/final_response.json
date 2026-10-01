@@ -1,0 +1,248 @@
+[
+  {
+    "inputs": {
+      "query": "Find 3-bed homes in Hilo under $600k"
+    },
+    "outputs": {
+      "category": "search",
+      "filters": {
+        "city": "Hilo",
+        "min_beds": 3,
+        "max_price": 600000
+      },
+      "expected_listing_ids": [
+        "MLS-1073",
+        "MLS-1075",
+        "MLS-1080",
+        "MLS-1085",
+        "MLS-1104",
+        "MLS-1105"
+      ]
+    },
+    "metadata": {
+      "scenario": "search-hilo-3bed-under-600k",
+      "category": "search"
+    }
+  },
+  {
+    "inputs": {
+      "query": "I'm looking for a condo in Honolulu, budget up to $700,000."
+    },
+    "outputs": {
+      "category": "search",
+      "filters": {
+        "city": "Honolulu",
+        "property_type": "condo",
+        "max_price": 700000
+      },
+      "expected_listing_ids": [
+        "MLS-1069"
+      ]
+    },
+    "metadata": {
+      "scenario": "search-honolulu-condo-under-700k",
+      "category": "search"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Show me anything in Honolulu under $300k."
+    },
+    "outputs": {
+      "category": "search",
+      "filters": {
+        "city": "Honolulu",
+        "max_price": 300000
+      },
+      "expected_listing_ids": [],
+      "must_state_no_matches": true,
+      "must_name_relaxed_constraint": true
+    },
+    "metadata": {
+      "scenario": "search-honolulu-under-300k-empty",
+      "category": "search"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Is Hilo a buyer's or seller's market right now?"
+    },
+    "outputs": {
+      "category": "market",
+      "city": "Hilo",
+      "months_of_inventory": 5.0,
+      "market_reading": "balanced",
+      "active_listings": 10,
+      "closed_sales": 24,
+      "closed_sales_window_months": 12,
+      "median_active_price": 520500,
+      "median_closed_price": 474000
+    },
+    "metadata": {
+      "scenario": "market-hilo",
+      "category": "market"
+    }
+  },
+  {
+    "inputs": {
+      "query": "How competitive is the Honolulu market? Give me months of inventory."
+    },
+    "outputs": {
+      "category": "market",
+      "city": "Honolulu",
+      "months_of_inventory": 2.8,
+      "market_reading": "seller's",
+      "active_listings": 12,
+      "closed_sales": 52,
+      "closed_sales_window_months": 12,
+      "median_active_price": 1042000,
+      "median_closed_price": 1146000
+    },
+    "metadata": {
+      "scenario": "market-honolulu",
+      "category": "market"
+    }
+  },
+  {
+    "inputs": {
+      "query": "What is MLS-1059 worth? Is the list price reasonable?"
+    },
+    "outputs": {
+      "category": "cma",
+      "subject": "MLS-1059",
+      "list_price": 1093000,
+      "reference_search": {
+        "radius_miles": 1.5,
+        "months_back": 6,
+        "max_sqft_delta_pct": 0.3
+      },
+      "comps_at_reference_search": 8,
+      "must_label_as_rough": false,
+      "indicated_value_range": {
+        "low": 1188149,
+        "midpoint": 1343096,
+        "high": 1554456
+      },
+      "list_price_vs_midpoint_pct": -18.6
+    },
+    "metadata": {
+      "scenario": "cma-listed-below-comps",
+      "category": "cma"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Run a CMA on MLS-1081."
+    },
+    "outputs": {
+      "category": "cma",
+      "subject": "MLS-1081",
+      "list_price": 257000,
+      "reference_search": {
+        "radius_miles": 1.5,
+        "months_back": 6,
+        "max_sqft_delta_pct": 0.3
+      },
+      "comps_at_reference_search": 2,
+      "must_label_as_rough": true,
+      "indicated_value_range": {
+        "low": 257302,
+        "midpoint": 291076,
+        "high": 324850
+      },
+      "list_price_vs_midpoint_pct": -11.7
+    },
+    "metadata": {
+      "scenario": "cma-thin-comp-set",
+      "category": "cma"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Run a CMA on MLS-1055."
+    },
+    "outputs": {
+      "category": "cma",
+      "subject": "MLS-1055",
+      "list_price": 651000,
+      "reference_search": {
+        "radius_miles": 1.5,
+        "months_back": 6,
+        "max_sqft_delta_pct": 0.3
+      },
+      "comps_at_reference_search": 0,
+      "must_label_as_rough": true,
+      "indicated_value_range": null,
+      "list_price_vs_midpoint_pct": null
+    },
+    "metadata": {
+      "scenario": "cma-no-comps",
+      "category": "cma"
+    }
+  },
+  {
+    "inputs": {
+      "query": "New lead: Kai Nakamura, pre-approved, wants a 3-bed in Hilo, budget $600k, hoping to close within 2 months. How strong a lead is this?"
+    },
+    "outputs": {
+      "category": "lead",
+      "tier": "hot",
+      "score": 100,
+      "active_listings_in_city": 10,
+      "listings_meeting_requirements": 8,
+      "listings_within_budget_and_requirements": 6,
+      "listings_within_budget_including_fees": 6
+    },
+    "metadata": {
+      "scenario": "lead-hot-hilo",
+      "category": "lead"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Qualify this lead: Leilani Kahale, not pre-approved yet, looking for a 3-bedroom in Honolulu with a max budget of $700k, timeline about a year."
+    },
+    "outputs": {
+      "category": "lead",
+      "tier": "cool",
+      "score": 8,
+      "active_listings_in_city": 12,
+      "listings_meeting_requirements": 10,
+      "listings_within_budget_and_requirements": 0,
+      "listings_within_budget_including_fees": 0
+    },
+    "metadata": {
+      "scenario": "lead-budget-clears-nothing",
+      "category": "lead"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Run a CMA on MLS-1085, then draft an email to my buyer Kai Nakamura (kai@example.com) recommending an offer price."
+    },
+    "outputs": {
+      "category": "workflow",
+      "subject": "MLS-1085",
+      "list_price": 501000,
+      "reference_search": {
+        "radius_miles": 1.5,
+        "months_back": 6,
+        "max_sqft_delta_pct": 0.3
+      },
+      "comps_at_reference_search": 8,
+      "must_label_as_rough": false,
+      "indicated_value_range": {
+        "low": 406633,
+        "midpoint": 464367,
+        "high": 497308
+      },
+      "list_price_vs_midpoint_pct": 7.9,
+      "draft_required": true,
+      "must_not_claim_sent": true
+    },
+    "metadata": {
+      "scenario": "workflow-cma-then-offer-email",
+      "category": "workflow"
+    }
+  }
+]

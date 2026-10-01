@@ -237,7 +237,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 83 tests, ~1.5s
+uv run pytest tests/ -q       # 85 tests, ~1.5s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -255,6 +255,31 @@ report a different result on identical source. ruff enforces its own pin via
 `required-version` and will refuse to run if you drop it; ty has no equivalent,
 so that one is on you. `ruff format` is deliberately **not** used here — see
 `CLAUDE.md`.
+
+### Evaluation datasets
+
+`evals/datasets/` holds three LangSmith-ready datasets, built offline from the
+mock:
+
+| File | Asks |
+|---|---|
+| `final_response.json` | Did the answer state the right facts — listing ids, months of inventory, comp count, value range, lead tier? |
+| `trajectory.json` | Did the orchestrator delegate to the right specialist, in order, and did it call the right tools? |
+| `guardrails.json` | Fair housing, no send, write containment, checkpoint privacy, no invented listings, no legal opinions, no pressure tactics |
+
+Expected values are **computed, not recorded**: `evals/build_datasets.py` runs
+the agent's own tools against `MockListingsProvider`, so they are ground truth
+for the seeded dataset rather than a snapshot of what one model run said. The
+JSON is committed for review, and `test_eval_datasets_match_the_mock` fails the
+moment a mock change moves an expected answer.
+
+```bash
+uv run python -m evals.build_datasets   # regenerate; prints the upload commands
+```
+
+Building contacts nothing. Uploading is a separate step with the `langsmith`
+CLI and your API key. The CLI's own docs say an existing name is rejected, so a
+re-upload means deleting the old dataset first.
 
 ### CI
 
