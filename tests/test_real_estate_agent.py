@@ -1114,11 +1114,18 @@ def test_the_eval_graders_score_known_runs() -> None:
     assert figures_stated(_eval_run(good), market)["score"] == 1
     assert figures_stated(_eval_run("Hilo is a seller's market."), market)["score"] == 0
 
+    # Bounds, not figures: shaped like the first live reply, which kept 4 of 8
+    # comps after adjustment and gave a range inside the raw spread.
     cma = _eval_example("scenarios", "cma-listed-below-comps")["outputs"]
     low, high = cma["indicated_value_range"]["low"], cma["indicated_value_range"]["high"]
-    answer = f"{cma['comps_at_reference_search']} comparable sales put it at ${low:,} to ${high / 1e6:.2f}M."
+    inside = f"${low * 1.05 / 1e6:.2f}M – ${high * 0.97:,.0f}"
+    answer = f"Four comps survived adjustment, putting value at {inside}."
     at_defaults = ("market-analyst", "find_comparables", {"listing_id": cma["subject"]}, "success")
     assert figures_stated(_eval_run(answer, at_defaults), cma)["score"] == 1
+    too_high = f"Four comps support ${high * 1.1:,.0f} to ${high * 1.2:,.0f}."
+    assert figures_stated(_eval_run(too_high, at_defaults), cma)["score"] == 0.5
+    too_few = f"Two comps support {inside}."
+    assert figures_stated(_eval_run(too_few, at_defaults), cma)["score"] == 0.5
     narrower = ("market-analyst", "find_comparables", {"listing_id": cma["subject"], "radius_miles": 1.0}, "success")
     assert figures_stated(_eval_run(answer, narrower), cma)["score"] is None
     thin = _eval_example("scenarios", "cma-thin-comp-set")["outputs"]
@@ -1216,7 +1223,7 @@ def test_every_eval_flag_has_a_grader() -> None:
     assert flags - {"draft_required"} <= set(_FLAG_REQUIREMENTS)
 
 
-def test_the_eval_runner_isolates_its_workspace_before_importing_the_package() -> None:
+def test_the_eval_entry_points_set_their_environment_before_importing_the_package() -> None:
     """The runner is an entry point, with `main.py`'s import-order constraint and one more.
 
     `config.py` evaluates `PROJECT_ROOT` at import, so `REA_PROJECT_ROOT` must be
@@ -1227,13 +1234,38 @@ def test_the_eval_runner_isolates_its_workspace_before_importing_the_package() -
     `workspace/`. The `.env` load must come first too, or a `REA_PROJECT_ROOT`
     in `.env` would overwrite the temp root.
     """
+    def package_imports(tree: ast.AST) -> list[ast.ImportFrom]:
+        # `evals.*` submodules, but not `evals` itself: its __init__ holds only
+        # stdlib helpers, so `from evals import confirm` is safe at module scope
+        # -- for exactly as long as the assertion below holds.
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and (
+                (node.module or "").split(".")[0] == "real_estate_agent"
+                or (node.module or "").startswith("evals.")
+            )
+        ]
+
+    init = ast.parse((PROJECT_ROOT / "evals" / "__init__.py").read_text("utf-8"))
+    assert not package_imports(init) and not _package_imports(init), (
+        "evals/__init__.py now imports the package, so `from evals import ...` "
+        "at module scope in an entry point runs before .env is loaded"
+    )
+
+    # The uploader is an entry point too, with only the `.env` half: it never
+    # empties a workspace, so it has no root to set.
+    uploader = ast.parse((PROJECT_ROOT / "evals" / "upload_datasets.py").read_text("utf-8"))
+    uploader_imports = package_imports(uploader)
+    assert uploader_imports
+    assert not [node for node in uploader_imports if node in uploader.body]
+    assert max(call.lineno for call in _dotenv_calls(uploader)) < min(
+        node.lineno for node in uploader_imports
+    )
+
     tree = ast.parse((PROJECT_ROOT / "evals" / "run_experiments.py").read_text("utf-8"))
-    imports = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
-        and (node.module or "").split(".")[0] in {"real_estate_agent", "evals"}
-    ]
+    imports = package_imports(tree)
     assert imports, "the runner imports the package somewhere, or this checks nothing"
     assert not [node for node in imports if node in tree.body], (
         "a module-scope package import runs before main() can set REA_PROJECT_ROOT"
@@ -1253,6 +1285,64 @@ def test_the_eval_runner_isolates_its_workspace_before_importing_the_package() -
     assert calls and root_writes
     first_import = min(node.lineno for node in imports)
     assert max(call.lineno for call in calls) < min(node.lineno for node in root_writes) < first_import
+
+
+def test_the_eval_target_seeds_the_contract_the_documents_scenario_reviews(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty documents folder made the honest answer "please upload it".
+
+    Measured in the first live run: the orchestrator found nothing, asked for
+    the file without delegating, and the trajectory graders scored that correct
+    behaviour as a miss. The fixture is what makes delegating correct, and the
+    real `extract_document_text` must be able to read it once seeded -- a
+    fixture the tool rejects would put the scenario straight back there.
+    """
+    from evals.target import seed_documents
+
+    seed_documents(tmp_path)
+    assert [path.name for path in tmp_path.iterdir()] == ["purchase-agreement.txt"]
+
+    monkeypatch.setattr(documents, "DOCUMENTS_DIR", tmp_path)
+    tools = {tool.name: tool for tool in make_document_tools()}
+    listed = json.loads(tools["list_documents"].invoke({}))
+    assert [doc["filename"] for doc in listed["documents"]] == ["purchase-agreement.txt"]
+    extracted = json.loads(
+        tools["extract_document_text"].invoke({"filename": "purchase-agreement.txt"})
+    )
+    assert "non-refundable to Buyer for any reason" in extracted["text"]
+
+
+def test_the_eval_uploader_plans_in_place_updates() -> None:
+    """Matched by query; nulls and LangSmith's own metadata are not changes.
+
+    LangSmith drops a null-valued output key (measured on cma-no-comps), so a
+    raw comparison would rewrite that example on every upload, forever.
+    """
+    from evals.upload_datasets import plan_sync
+
+    def example(query: str, **outputs: Any) -> dict[str, Any]:
+        return {"inputs": {"query": query}, "outputs": outputs, "metadata": {"scenario": query}}
+
+    local = [
+        example("same", a=1, gone=None),
+        example("changed", a=2),
+        example("new", a=3),
+    ]
+    remote = [
+        {**example("same", a=1), "id": "id-same", "metadata": {"scenario": "same", "dataset_split": ["base"]}},
+        {**example("changed", a=1), "id": "id-changed"},
+        {**example("old", a=0), "id": "id-old"},
+    ]
+    plan = plan_sync(local, remote)
+    assert plan.unchanged == 1
+    assert [example_id for example_id, _ in plan.update] == ["id-changed"]
+    assert [item["inputs"]["query"] for item in plan.create] == ["new"]
+    assert plan.stale == ["id-old"]
+
+    # Metadata missing remotely -- a CLI upload -- is a change to write.
+    no_metadata = {**example("same", a=1), "id": "id-same", "metadata": None}
+    assert [example_id for example_id, _ in plan_sync(local[:1], [no_metadata]).update] == ["id-same"]
 
 
 # --- streamlit app --------------------------------------------------------

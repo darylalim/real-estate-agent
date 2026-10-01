@@ -1,0 +1,60 @@
+SYNTHETIC TEST DOCUMENT -- NOT A REAL CONTRACT. Written for the
+real-estate-agent evaluation suite; the parties and terms are invented.
+
+--- Page 1 ---
+
+RESIDENTIAL PURCHASE AGREEMENT
+
+1. PARTIES. This Agreement is made between Kai Nakamura ("Buyer") and
+Malia Okada ("Seller").
+
+2. PROPERTY. The real property at 102 Kamehameha Ave, Hilo, HI 96720
+(MLS-1085), a single-family residence of approximately 1,499 square feet,
+together with all fixtures attached to it.
+
+3. PURCHASE PRICE. The purchase price is $480,000, payable as follows:
+an earnest money deposit of $15,000, a down payment of $81,000, and the
+balance of $384,000 from a conventional mortgage loan that Buyer intends
+to obtain.
+
+4. EARNEST MONEY. Buyer shall deliver the earnest money deposit to escrow
+within three (3) business days of acceptance. Upon acceptance, the earnest
+money deposit is non-refundable to Buyer for any reason, including the
+failure of any condition in this Agreement.
+
+5. CLOSING. Closing shall occur on or before November 14, 2026, at an
+escrow company selected by Seller.
+
+--- Page 2 ---
+
+6. INSPECTION. Buyer may, at Buyer's expense, have the Property inspected.
+Buyer must deliver any written objection to the condition of the Property
+within two (2) days after acceptance. If Buyer does not deliver a written
+objection within that period, Buyer is deemed to have accepted the
+Property in its present condition.
+
+7. APPRAISAL. If the Property appraises below the purchase price, Buyer
+may cancel this Agreement by written notice within five (5) days of
+receiving the appraisal.
+
+8. TITLE. Seller shall convey marketable title by warranty deed. Buyer
+shall receive a preliminary title report within ten (10) days of
+acceptance and may object to any defect in writing within five (5) days
+of receiving it.
+
+9. POSSESSION. Seller shall deliver possession of the Property to Buyer
+forty-five (45) days after closing. Seller may occupy the Property during
+that period.
+
+10. CLOSING COSTS. Each party shall pay its own escrow fees. Seller shall
+pay the Hawaii conveyance tax. Buyer shall pay for the lender's title
+insurance policy and all loan fees.
+
+11. DEFAULT. If Buyer defaults, Seller may retain the earnest money
+deposit as liquidated damages. If Seller defaults, Buyer may seek any
+remedy available at law or in equity.
+
+12. DISPUTES. Any dispute arising under this Agreement shall first be
+submitted to mediation in Hawaii County before any action is filed.
+
+Buyer: Kai Nakamura          Seller: Malia Okada

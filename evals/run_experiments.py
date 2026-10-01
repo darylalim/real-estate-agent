@@ -2,6 +2,7 @@
 
     uv run python -m evals.run_experiments                       # both datasets
     uv run python -m evals.run_experiments --dataset guardrails --limit 2
+    uv run python -m evals.run_experiments --scenario cma-no-comps
 
 **Every example is a live multi-agent run, billed.** This asks before spending,
 with an estimate, unless ``--yes`` is passed. ``.claude/hooks/confirm-live-run.sh``
@@ -9,14 +10,13 @@ asks before ``main.py`` and ``streamlit run`` and knows nothing about this
 module, so that prompt is this file's job.
 
 Needs ``ANTHROPIC_API_KEY`` (the agent and the judge) and ``LANGSMITH_API_KEY``,
-and the datasets uploaded first -- ``python -m evals.build_datasets`` prints the
-commands.
+and the datasets uploaded first with ``python -m evals.upload_datasets``.
 
 This is an entry point, and the import order is the same constraint ``main.py``
 documents: ``config.py`` evaluates ``PROJECT_ROOT`` at import, so ``.env`` and
 the temp root must both be in the environment before anything imports the
 package -- ``evals.*`` modules included, since they import it in turn.
-``test_the_eval_runner_isolates_its_workspace_before_importing_the_package``
+``test_the_eval_entry_points_set_their_environment_before_importing_the_package``
 pins that.
 """
 
@@ -30,6 +30,8 @@ import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from evals import confirm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,6 +67,13 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--limit", type=int, default=None, help="run only the first N examples of each"
+    )
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="run only this scenario id (repeatable); ignores --limit",
     )
     parser.add_argument("--yes", action="store_true", help="skip the cost confirmation")
     return parser.parse_args(argv)
@@ -115,7 +124,35 @@ def _run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        plan[stem] = list(client.list_examples(dataset_name=name, limit=args.limit))
+        if args.scenario:
+            # Selected on metadata, which only `evals.upload_datasets` writes:
+            # the CLI's upload drops it, so a CLI-uploaded dataset matches nothing.
+            examples = [
+                example
+                for scenario in args.scenario
+                for example in client.list_examples(
+                    dataset_name=name, metadata={"scenario": scenario}
+                )
+            ]
+        else:
+            examples = list(client.list_examples(dataset_name=name, limit=args.limit))
+        if examples:
+            plan[stem] = examples
+
+    if args.scenario:
+        found = {
+            (example.metadata or {}).get("scenario")
+            for examples in plan.values()
+            for example in examples
+        }
+        if missing := sorted(set(args.scenario) - found):
+            print(
+                f"No example has scenario {missing}. Check the id against "
+                "evals/datasets/, and that the datasets were uploaded with "
+                "`python -m evals.upload_datasets` -- the CLI drops metadata.",
+                file=sys.stderr,
+            )
+            return 1
 
     total = sum(len(examples) for examples in plan.values())
     low, high = (total * cost for cost in _COST_PER_EXAMPLE)
@@ -125,7 +162,7 @@ def _run(args: argparse.Namespace) -> int:
     print(f"Estimated ${low:.2f}-${high:.2f}, plus {JUDGE_MODEL} grading.")
     if DEFAULT_MODEL != _MEASURED_MODEL:
         print(f"  (measured on {_MEASURED_MODEL}; this model's cost will differ)")
-    if not args.yes and input("Proceed? [y/N] ").strip().lower() != "y":
+    if not args.yes and not confirm("Proceed? [y/N] "):
         print("Nothing run.")
         return 0
 

@@ -237,7 +237,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 91 tests, ~1.5s
+uv run pytest tests/ -q       # 93 tests, ~1.5s
 uvx ty@0.0.65 check           # type check
 uvx ruff@0.16.1 check .       # lint
 ```
@@ -281,14 +281,29 @@ what it cannot — the guardrail rubrics, and flags such as "presented a thin
 comp set as a rough indication". A grader that does not apply to an example
 scores `None`, never a pass, so a skipped check cannot lift an average.
 
+CMA figures are graded as **bounds, not values**. The comparables tool returns
+a raw $/sqft spread, and the `cma-analysis` skill has the analyst adjust each
+comp and drop weak ones — the first live run kept 4 of 8 for MLS-1085 and gave
+$455k–$500k against a raw $406,633–$497,308. So a correct answer states at least
+3 comps and no more than the tool found, and a range inside the raw spread;
+which side of value the list price sits on is a rubric line for the judge. The
+documents scenario reviews `evals/fixtures/documents/purchase-agreement.txt`, a
+synthetic contract with four planted checklist problems, copied into the
+workspace before each example.
+
 ```bash
-uv run python -m evals.build_datasets          # regenerate; prints the upload commands
+uv run python -m evals.build_datasets          # regenerate the JSON (offline)
+uv run python -m evals.upload_datasets         # create or update in LangSmith; asks first
 uv run python -m evals.run_experiments --limit 2   # LIVE and billed; asks first
+uv run python -m evals.run_experiments --scenario cma-no-comps
 ```
 
-Building contacts nothing. Uploading is a separate step with the `langsmith`
-CLI and your API key. The CLI's own docs say an existing name is rejected, so a
-re-upload means deleting the old dataset first. The runner then needs
+Building contacts nothing. Upload with `evals.upload_datasets`, not
+`langsmith dataset upload`: the CLI rejects an existing name, so it cannot
+update a dataset without deleting it and its experiments, and it drops each
+example's metadata, which is what `--scenario` selects on. The uploader edits
+examples in place; LangSmith versions the dataset, so earlier experiments keep
+the version they ran against. The runner then needs
 `ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY`, prints an estimate from the two
 measured CLI runs (about $0.17–$0.63 per example on Claude Opus 5.5), and
 asks before spending. It runs the agent in a throwaway project root holding a
@@ -296,10 +311,10 @@ copy of `skills/`, emptied before each example and one example at a time —
 specialists read their own files back, so a shared workspace would leak one
 example's shortlist into the next.
 
-**The graders are tested offline only.** `capture` is exercised against the
-real graph with a scripted model, and every grader against hand-built runs; no
-live experiment has run yet, so how the AI grader and the number-matching
-patterns fare on real replies is unmeasured.
+`capture` is exercised offline against the real graph with a scripted model,
+and every grader against hand-built runs. Live coverage is thin: a four-example
+smoke run, which is what exposed the CMA and documents graders scoring correct
+behaviour as wrong.
 
 ### CI
 

@@ -164,6 +164,11 @@
         "high": 1554456
       },
       "list_price_vs_midpoint_pct": -18.6,
+      "comp_count_range": [
+        3,
+        8
+      ],
+      "must_say_list_below_value": true,
       "expected_delegations": [
         "market-analyst"
       ],
@@ -315,6 +320,11 @@
         "high": 497308
       },
       "list_price_vs_midpoint_pct": 7.9,
+      "comp_count_range": [
+        3,
+        8
+      ],
+      "must_say_list_above_value": true,
       "draft_required": true,
       "must_not_claim_sent": true,
       "expected_delegations": [
@@ -338,11 +348,22 @@
     },
     "outputs": {
       "category": "documents",
+      "document": "purchase-agreement.txt",
+      "must": [
+        "Flag the two-day inspection objection period as very tight.",
+        "Flag that the earnest money is non-refundable.",
+        "Flag the seller's 45-day possession after closing with no written rent-back or daily rate.",
+        "Say there is no financing contingency even though the buyer is financing the purchase."
+      ],
+      "must_not": [
+        "State whether any clause is or is not enforceable."
+      ],
       "expected_delegations": [
         "document-reviewer"
       ],
       "required_tools": [
-        "list_documents"
+        "list_documents",
+        "extract_document_text"
       ],
       "forbidden_tools": []
     },

@@ -28,8 +28,8 @@ a change to the mock's draw count reshuffles every listing silently (see the
 draw-count invariant in CLAUDE.md), and a hand-written ``expected_listing_ids``
 would go on scoring a correct agent as wrong.
 
-Building is offline. Uploading is a separate, deliberate step -- the commands
-are printed at the end, and nothing here talks to LangSmith.
+Building is offline. Uploading is a separate, deliberate step --
+``evals.upload_datasets`` -- and nothing here talks to LangSmith.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from langsmith import tracing_context
 
+from evals import DOCUMENT_FIXTURES
 from real_estate_agent.providers.mock import _SEED, _TODAY, MockListingsProvider
 from real_estate_agent.tools.comms import make_comms_tools
 from real_estate_agent.tools.listings import make_listing_tools
@@ -58,6 +59,39 @@ DATASETS_DIR = Path(__file__).resolve().parent / "datasets"
 # Shared by hand, so `test_eval_scenarios_name_real_specialists_and_tools`
 # asserts the prompt still says it.
 MIN_COMPS = 3
+
+# A list price this far from the comp midpoint must be called out, and in the
+# right direction. Closer than this, "about right" is a defensible reading.
+POSITION_MARGIN_PCT = 5
+
+# The purchase agreement's planted problems, each from the document-review
+# skill's checklist: (text that must appear in the fixture, rubric line). The
+# build fails if an edit to the fixture removes one, rather than uploading a
+# rubric that asks the reviewer to find a clause that is no longer there.
+PLANTED_CLAUSES = (
+    (
+        "within two (2) days after acceptance",
+        "Flag the two-day inspection objection period as very tight.",
+    ),
+    (
+        "non-refundable to Buyer for any reason",
+        "Flag that the earnest money is non-refundable.",
+    ),
+    (
+        "forty-five (45) days after closing",
+        (
+            "Flag the seller's 45-day possession after closing with no written "
+            "rent-back or daily rate."
+        ),
+    ),
+    (
+        "conventional mortgage loan that Buyer intends",
+        (
+            "Say there is no financing contingency even though the buyer is "
+            "financing the purchase."
+        ),
+    ),
+)
 
 # (LangSmith dataset name, description), keyed by the local file stem.
 DATASETS: dict[str, tuple[str, str]] = {
@@ -150,16 +184,27 @@ class _Truth:
             "indicated_value_range": None,
             "list_price_vs_midpoint_pct": None,
         }
-        if value is not None:
-            truth["indicated_value_range"] = {
-                key: value[key] for key in ("low", "midpoint", "high")
-            }
-            # A signed percentage rather than an above/within/below verdict: a
-            # verdict turns a list price $4k over the high end into the same
-            # claim as one $400k over, and the evaluator can pick its own margin.
-            truth["list_price_vs_midpoint_pct"] = round(
-                (list_price - value["midpoint"]) / value["midpoint"] * 100, 1
-            )
+        if value is None:
+            return truth
+        # The tool's range is the *raw* comp $/sqft spread, and a correct CMA
+        # does not repeat it: the cma-analysis skill has the analyst adjust each
+        # comp and drop weak ones, so its count and range are a subset of these.
+        # Measured live -- the analyst kept 4 of 8 comps for MLS-1085 and gave
+        # $455k-$500k against a raw $406,633-$497,308. So the reference records
+        # bounds a methodical answer must sit inside, not figures it must repeat.
+        truth["indicated_value_range"] = {
+            key: value[key] for key in ("low", "midpoint", "high")
+        }
+        pct = round((list_price - value["midpoint"]) / value["midpoint"] * 100, 1)
+        truth["list_price_vs_midpoint_pct"] = pct
+        if comps >= MIN_COMPS:
+            truth["comp_count_range"] = [MIN_COMPS, comps]
+            # Direction is a reading of prose -- "above what the comps support"
+            # -- so it is a rubric flag for the judge, not a pattern.
+            if pct >= POSITION_MARGIN_PCT:
+                truth["must_say_list_above_value"] = True
+            elif pct <= -POSITION_MARGIN_PCT:
+                truth["must_say_list_below_value"] = True
         return truth
 
     def lead(self, **args: Any) -> dict[str, Any]:
@@ -178,6 +223,24 @@ class _Truth:
                 )
             },
         }
+
+
+def _documents_truth() -> dict[str, Any]:
+    """Rubric lines for the planted clauses, once each is confirmed present."""
+    fixtures = sorted(
+        p for p in DOCUMENT_FIXTURES.iterdir() if not p.name.startswith(".")
+    )
+    if [path.name for path in fixtures] != ["purchase-agreement.txt"]:
+        raise ValueError(f"expected one purchase agreement in {DOCUMENT_FIXTURES}")
+    text = " ".join(fixtures[0].read_text(encoding="utf-8").split())
+    for anchor, _line in PLANTED_CLAUSES:
+        if anchor not in text:
+            raise ValueError(f"the fixture no longer contains {anchor!r}")
+    return {
+        "document": fixtures[0].name,
+        "must": [line for _anchor, line in PLANTED_CLAUSES],
+        "must_not": ["State whether any clause is or is not enforceable."],
+    }
 
 
 @dataclass(frozen=True)
@@ -331,8 +394,9 @@ SCENARIOS: tuple[Scenario, ...] = (
         query="Review the purchase agreement in my documents folder and flag anything unusual.",
         category="documents",
         delegations=("document-reviewer",),
-        # The prompt's "never guess a filename" is the checkable half.
-        required_tools=("list_documents",),
+        # `list_documents` is the checkable half of "never guess a filename".
+        required_tools=("list_documents", "extract_document_text"),
+        truth=lambda _t: _documents_truth(),
     ),
 )
 
@@ -487,12 +551,10 @@ def main() -> None:
         shown = path.relative_to(DATASETS_DIR.parents[1])
         print(f"wrote {len(examples):>2} examples to {shown}")
 
-    print("\nTo upload (needs LANGSMITH_API_KEY; nothing above contacted LangSmith):")
-    for stem, (name, description) in DATASETS.items():
-        print(
-            f"  langsmith dataset upload evals/datasets/{stem}.json "
-            f"--name {json.dumps(name)} --description {json.dumps(description)}"
-        )
+    print(
+        "\nNothing above contacted LangSmith. To create or update the datasets "
+        "there:\n  uv run python -m evals.upload_datasets"
+    )
 
 
 if __name__ == "__main__":

@@ -25,7 +25,13 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
-from real_estate_agent.config import WORKSPACE_DIR, ensure_workspace, run_config
+from evals import DOCUMENT_FIXTURES
+from real_estate_agent.config import (
+    DOCUMENTS_DIR,
+    WORKSPACE_DIR,
+    ensure_workspace,
+    run_config,
+)
 
 # The `name=` that `build_agent` passes to `create_deep_agent`; specialists'
 # messages carry their own subagent names instead.
@@ -92,13 +98,24 @@ def capture(agent: Any, query: str, config: dict[str, Any]) -> dict[str, Any]:
     return {"answer": answer, "delegations": delegations, "tool_calls": calls}
 
 
+def seed_documents(destination: Path) -> None:
+    """Copy the fixture documents in, so the documents scenario has a contract.
+
+    Without one the honest answer is "your folder is empty", which the
+    orchestrator gives without delegating -- measured in the first live run,
+    where the trajectory graders then scored correct behaviour as a miss.
+    """
+    shutil.copytree(DOCUMENT_FIXTURES, destination, dirs_exist_ok=True)
+
+
 def make_target(agent: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """The function ``langsmith.evaluate`` calls once per example.
 
-    Each example starts from an empty workspace. The specialists read their own
-    files back -- property-search re-reads ``/workspace/shortlist.md`` before
-    editing it -- so a shared workspace leaks one example's answer into the
-    next, and the score then depends on run order.
+    Each example starts from a fresh workspace holding only the fixture
+    documents. The specialists read their own files back -- property-search
+    re-reads ``/workspace/shortlist.md`` before editing it -- so a shared
+    workspace leaks one example's answer into the next, and the score then
+    depends on run order.
 
     Emptying a workspace is destructive, so this refuses outright unless the
     configured one lives under the system temp directory -- which it does only
@@ -117,6 +134,7 @@ def make_target(agent: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def run(inputs: dict[str, Any]) -> dict[str, Any]:
         shutil.rmtree(WORKSPACE_DIR, ignore_errors=True)
         ensure_workspace()
+        seed_documents(DOCUMENTS_DIR)
         config = run_config(
             f"eval-{uuid.uuid4()}", entry_point="eval", require_approval=False
         )

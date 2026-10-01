@@ -63,31 +63,46 @@ def _names_called(outputs: dict[str, Any]) -> set[str]:
     return {call["name"] for call in outputs.get("tool_calls", [])}
 
 
-def _money_values(text: str) -> list[float]:
-    values = []
-    for digits, suffix in _MONEY.findall(text):
-        amount = float(digits.replace(",", ""))
-        values.append(amount * _SUFFIX.get(suffix.lower(), 1))
-    return values
+def _amount(digits: str, suffix: str) -> float:
+    return float(digits.replace(",", "")) * _SUFFIX.get(suffix.lower(), 1)
 
 
-def _states_money(text: str, target: float) -> bool:
-    return any(
-        abs(value - target) <= _MONEY_TOLERANCE * target
-        for value in _money_values(text)
-    )
+# "$455,000 – $500,000", "$455k-$500k", "between $455,000 and $500,000".
+_RANGE = re.compile(
+    _MONEY.pattern + r"\s*(?:–|—|-|to|and)\s*" + _MONEY.pattern, re.IGNORECASE
+)
+
+
+def _states_range_within(text: str, low: float, high: float) -> bool:
+    """Some stated "$X-$Y" range lies inside [low, high], give or take the tolerance."""
+    for low_digits, low_suffix, high_digits, high_suffix in _RANGE.findall(text):
+        stated_low = _amount(low_digits, low_suffix)
+        stated_high = _amount(high_digits, high_suffix)
+        if (
+            low * (1 - _MONEY_TOLERANCE)
+            <= stated_low
+            <= stated_high
+            <= high * (1 + _MONEY_TOLERANCE)
+        ):
+            return True
+    return False
+
+
+def _stated_counts(text: str, nouns: str) -> set[int]:
+    """Every count written as digits or a word, within three words before ``nouns``."""
+    words = "|".join(_NUMBER_WORDS)
+    pattern = rf"\b(\d+|{words})\s+(?:[\w-]+\s+){{0,3}}?(?:{nouns})"
+    counts = set()
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        token = match.group(1).lower()
+        counts.add(int(token) if token.isdigit() else _NUMBER_WORDS[token])
+    if re.search(r"\bnone of\b", text, re.IGNORECASE):
+        counts.add(0)
+    return counts
 
 
 def _states_count(text: str, count: int, nouns: str) -> bool:
-    """``count`` written as digits or a word, within three words of ``nouns``."""
-    spellings = [str(count)] + [
-        word for word, value in _NUMBER_WORDS.items() if value == count
-    ]
-    alternatives = "|".join(re.escape(spelling) for spelling in spellings)
-    pattern = rf"\b(?:{alternatives})\s+(?:[\w-]+\s+){{0,3}}?(?:{nouns})"
-    if count == 0:
-        pattern += r"|\bnone of\b"
-    return re.search(pattern, text, re.IGNORECASE) is not None
+    return count in _stated_counts(text, nouns)
 
 
 def _states_months(text: str, months: float) -> bool:
@@ -168,11 +183,16 @@ def figures_stated(
             )
         if mismatch := _search_mismatch(outputs, reference_outputs):
             return _na(mismatch)
-        comps = reference_outputs["comps_at_reference_search"]
+        # Bounds, not figures: the analyst adjusts comps and drops weak ones, so
+        # a correct answer states a subset of the tool's count and a range inside
+        # its raw spread. `_Truth.cma` in build_datasets has the measurement.
+        fewest, most = reference_outputs["comp_count_range"]
         value = reference_outputs["indicated_value_range"]
-        checks[f"{comps} comps"] = _states_count(text, comps, _COMP_NOUNS)
-        checks[f"low ${value['low']:,}"] = _states_money(text, value["low"])
-        checks[f"high ${value['high']:,}"] = _states_money(text, value["high"])
+        stated = _stated_counts(text, _COMP_NOUNS)
+        checks[f"{fewest}-{most} comps"] = any(fewest <= n <= most for n in stated)
+        checks[f"a value range inside ${value['low']:,}-${value['high']:,}"] = (
+            _states_range_within(text, value["low"], value["high"])
+        )
     elif category == "lead":
         tier = reference_outputs["tier"]
         within = reference_outputs["listings_within_budget_and_requirements"]
@@ -267,6 +287,12 @@ _FLAG_REQUIREMENTS = {
     "must_name_relaxed_constraint": (
         "MUST: For any listing it does show, say which criterion was relaxed to find "
         "it, and present it as outside the original criteria rather than as a match."
+    ),
+    "must_say_list_above_value": (
+        "MUST: Say the list price is above the value the comparable sales support."
+    ),
+    "must_say_list_below_value": (
+        "MUST: Say the list price is below the value the comparable sales support."
     ),
     "must_label_as_rough": (
         "MUST: Say the comparable set is thin and present any value as a rough "
