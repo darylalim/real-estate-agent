@@ -11,15 +11,20 @@ from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.human_in_the_loop import InterruptOnConfig
+from langchain.chat_models import init_chat_model
+from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
 from real_estate_agent.config import (
+    DEFAULT_EFFORT,
     DEFAULT_MODEL,
     PROJECT_ROOT,
+    ROLE_EFFORTS,
     ROLE_MODELS,
     SUBAGENT_ROLES,
     ensure_workspace,
+    provider_of,
 )
 from real_estate_agent.providers.base import ListingsProvider
 from real_estate_agent.providers.mock import MockListingsProvider
@@ -88,11 +93,38 @@ WORKSPACE_PERMISSIONS: list[FilesystemPermission] = [
 ]
 
 
+def chat_model(spec: str, effort: str | None) -> str | BaseChatModel:
+    """``spec`` with ``effort`` applied, or ``spec`` unchanged when there is none.
+
+    No effort keeps the plain string, so the default path is exactly what it
+    was before efforts existed. A spec that is already a model (the test
+    suite's scripted fakes) is returned as it is: there is nothing to apply an
+    effort to.
+
+    On Anthropic models whose profile lists ``xhigh``, langchain-anthropic pairs
+    an effort with ``thinking: {"type": "adaptive", "display": "summarized"}``.
+    The no-effort baseline omits ``thinking``, which the API runs as adaptive
+    with ``display: "omitted"``, so left alone an effort would also switch on
+    summarised reasoning -- two changes where one was asked for. Plain
+    ``adaptive`` is that omitted default, stated explicitly.
+    ``test_an_effort_changes_the_effort_and_nothing_else`` checks the payload.
+    """
+    if effort is None or not isinstance(spec, str):
+        return spec
+    model = init_chat_model(spec, reasoning_effort=effort)
+    levels = (getattr(model, "profile", None) or {}).get("reasoning_effort_levels") or ()
+    if provider_of(spec) == "anthropic" and "xhigh" in levels:
+        model = init_chat_model(spec, reasoning_effort=effort, thinking={"type": "adaptive"})
+    return model
+
+
 def build_agent(
     *,
     provider: ListingsProvider | None = None,
     model: str | None = None,
     subagent_model: str | None = None,
+    effort: str | None = None,
+    subagent_effort: str | None = None,
     require_approval: bool = False,
     checkpointer: BaseCheckpointSaver | None = None,
 ):
@@ -107,6 +139,11 @@ def build_agent(
             omitted, each specialist takes its ``REA_MODEL_<ROLE>``, then
             ``REA_SUBAGENT_MODEL``, then ``REA_MODEL`` -- the environment's
             orchestrator model, not this call's ``model``.
+        effort: Orchestrator effort (``low`` .. ``max``). Defaults to
+            ``REA_EFFORT``; unset sends none, so the API default applies.
+        subagent_effort: Effort for every specialist, with the same precedence
+            as ``subagent_model``: when omitted, ``REA_EFFORT_<ROLE>``, then
+            ``REA_SUBAGENT_EFFORT``, then ``REA_EFFORT``.
         require_approval: When True, writing a client-facing draft pauses for
             human approval via the interrupt mechanism. Requires a checkpointer.
         checkpointer: LangGraph checkpointer. Defaults to ``InMemorySaver`` so
@@ -120,8 +157,12 @@ def build_agent(
 
     provider = provider or MockListingsProvider()
     model = model or DEFAULT_MODEL
-    # Read at call time, not bound as a default, so tests can patch it.
+    effort = effort or DEFAULT_EFFORT
+    # Read at call time, not bound as defaults, so tests can patch them.
     role_models = dict.fromkeys(SUBAGENT_ROLES, subagent_model) if subagent_model else ROLE_MODELS
+    role_efforts = (
+        dict.fromkeys(SUBAGENT_ROLES, subagent_effort) if subagent_effort else ROLE_EFFORTS
+    )
 
     listing_tools = make_listing_tools(provider)
     market_tools = make_market_tools(provider)
@@ -133,7 +174,9 @@ def build_agent(
         market_tools=market_tools,
         document_tools=document_tools,
         comms_tools=comms_tools,
-        models=role_models,
+        models={
+            role: chat_model(spec, role_efforts.get(role)) for role, spec in role_models.items()
+        },
     )
 
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = (
@@ -148,7 +191,7 @@ def build_agent(
     # exist depending on the model string. The orchestrator prompt depends on
     # it, so pin it explicitly.
     return create_deep_agent(
-        model=model,
+        model=chat_model(model, effort),
         system_prompt=ORCHESTRATOR_PROMPT,
         middleware=[TodoListMiddleware()],
         subagents=subagents,

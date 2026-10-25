@@ -1010,6 +1010,102 @@ def test_an_explicit_subagent_model_beats_a_per_role_variable(monkeypatch) -> No
     assert from_env is not None and from_env["property-search"] == "anthropic:claude-haiku-5-5"
 
 
+# --- effort ---------------------------------------------------------------
+
+
+def test_an_effort_outside_the_api_levels_is_rejected_by_name() -> None:
+    """A typo fails at import, naming the variable, instead of as a 400 mid-run."""
+    from real_estate_agent.config import resolve_effort
+
+    assert resolve_effort({"REA_EFFORT": "low"}, "REA_EFFORT") == "low"
+    assert resolve_effort({"REA_EFFORT": ""}, "REA_EFFORT") is None
+    assert resolve_effort({}, "REA_EFFORT") is None
+    with pytest.raises(ValueError, match="REA_EFFORT_MARKET_ANALYST"):
+        resolve_effort({"REA_EFFORT_MARKET_ANALYST": "hgih"}, "REA_EFFORT_MARKET_ANALYST")
+
+
+def test_unset_role_efforts_fall_back_to_the_shared_specialist_effort() -> None:
+    from real_estate_agent.config import SUBAGENT_ROLES, resolve_role_efforts
+
+    resolved = resolve_role_efforts({"REA_EFFORT_CLIENT_LIAISON": "max"}, "low")
+    assert resolved == {role: "max" if role == "client-liaison" else "low" for role in SUBAGENT_ROLES}
+    assert resolve_role_efforts({}, None) == dict.fromkeys(SUBAGENT_ROLES)
+
+
+def test_an_effort_changes_the_effort_and_nothing_else() -> None:
+    """Built offline from the request payload; nothing is sent.
+
+    langchain-anthropic pairs `reasoning_effort` with
+    `thinking: {"type": "adaptive", "display": "summarized"}` on any model whose
+    profile lists `xhigh`, while the no-effort baseline omits `thinking` and so
+    gets the API's `display: "omitted"`. Left alone, every effort setting would
+    also switch on summarised reasoning, and an eval comparing efforts would be
+    measuring two changes at once. Plain `adaptive` is the omitted default
+    stated explicitly. Haiku 5.5's profile lists no levels, so langchain adds
+    nothing there and neither do we.
+    """
+    from langchain_core.messages import HumanMessage
+
+    from real_estate_agent.agent import chat_model
+
+    def payload(spec: str, effort: str) -> dict[str, Any]:
+        model = chat_model(spec, effort)
+        assert not isinstance(model, str)
+        return cast(Any, model)._get_request_payload([HumanMessage("hi")])
+
+    for spec in ("anthropic:claude-opus-5-5", "anthropic:claude-sonnet-5-5"):
+        sent = payload(spec, "low")
+        assert sent["output_config"] == {"effort": "low"}
+        assert sent["thinking"] == {"type": "adaptive"}
+    assert "thinking" not in payload("anthropic:claude-haiku-5-5", "low")
+
+    # No effort leaves the plain string, so the default path is unchanged.
+    assert chat_model("anthropic:claude-opus-5-5", None) == "anthropic:claude-opus-5-5"
+    sentinel = object()
+    assert chat_model(cast(Any, sentinel), "low") is sentinel
+
+
+def test_an_effort_does_not_change_the_tool_list(monkeypatch) -> None:
+    """deepagents resolves its middleware from the model, and an effort turns a
+    `provider:model` string into a model instance. A different harness profile
+    for the instance would add or drop tools -- `write_todos` among them --
+    with nothing failing."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    from real_estate_agent.agent import build_agent
+
+    plain = _tool_names(build_agent())
+    with_effort = _tool_names(build_agent(effort="low", subagent_effort="max"))
+    assert with_effort == plain
+    assert "write_todos" in with_effort
+
+
+def test_an_explicit_subagent_effort_beats_a_per_role_variable(monkeypatch) -> None:
+    from real_estate_agent import agent
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    monkeypatch.setattr(
+        agent, "ROLE_EFFORTS", dict.fromkeys(agent.SUBAGENT_ROLES) | {"market-analyst": "max"}
+    )
+    seen: list[Any] = []
+    real_build_subagents = agent.build_subagents
+
+    def spy(**kwargs: Any) -> Any:
+        seen.append(kwargs["models"])
+        return real_build_subagents(**kwargs)
+
+    monkeypatch.setattr(agent, "build_subagents", spy)
+
+    agent.build_agent(subagent_effort="low")
+    agent.build_agent()
+    explicit, from_env = seen
+    assert {role: m.reasoning_effort for role, m in explicit.items()} == dict.fromkeys(
+        agent.SUBAGENT_ROLES, "low"
+    )
+    assert from_env["market-analyst"].reasoning_effort == "max"
+    # Unset roles keep the plain string: no effort sent, the API default applies.
+    assert isinstance(from_env["property-search"], str)
+
+
 # --- evaluation datasets --------------------------------------------------
 #
 # `evals/datasets/*.json` is ground truth computed from the mock and committed so
@@ -2276,7 +2372,9 @@ def test_run_config_reaches_every_run_in_a_trace() -> None:
     from langgraph.graph import END, START, StateGraph
 
     from real_estate_agent.config import (
+        DEFAULT_EFFORT,
         DEFAULT_MODEL,
+        ROLE_EFFORTS,
         ROLE_MODELS,
         SUBAGENT_MODEL,
         run_config,
@@ -2322,6 +2420,10 @@ def test_run_config_reaches_every_run_in_a_trace() -> None:
     # metadata, and "which runs had the analyst on Haiku" is the question.
     for role, role_model in ROLE_MODELS.items():
         assert metadata[f"model_{role.replace('-', '_')}"] == role_model
+    # Effort too, or traces from two effort settings are indistinguishable.
+    for role, role_effort in ROLE_EFFORTS.items():
+        assert metadata[f"effort_{role.replace('-', '_')}"] == role_effort
+    assert metadata["effort"] == DEFAULT_EFFORT
     assert metadata["app_version"] == _pyproject()["project"]["version"]
 
     (step,) = [child for child in root.child_runs if child.name == "step"]

@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 98 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 103 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -561,13 +561,25 @@ being written.
   `"name"` literals in `subagents.py` and `SUBAGENT_ROLES` in `config.py` — and
   `test_each_specialist_gets_the_model_configured_for_its_role` ties them; `build_subagents` also raises on a
   role it does not know, so a typo cannot fall back to the orchestrator's model unnoticed.
+- **An effort must change the effort and nothing else, and langchain-anthropic does not do that by itself.**
+  On a model whose profile lists `xhigh` (Opus 5.5, Sonnet 5.5), passing `reasoning_effort` also sends
+  `thinking: {"type": "adaptive", "display": "summarized"}`, while the no-effort baseline omits `thinking` and
+  gets the API default, `display: "omitted"`. So every effort setting would also switch on summarised
+  reasoning blocks, and an eval comparing efforts would measure two changes at once. Measured offline on
+  langchain-anthropic 1.7.6 from `_get_request_payload`; `thinking=None` does not suppress it, because `None`
+  reads as "not set". `agent.chat_model` passes plain `{"type": "adaptive"}` (the documented equivalent of
+  omitting it) under the same `xhigh` gate, and `test_an_effort_changes_the_effort_and_nothing_else` pins the
+  payload. Haiku 5.5's profile lists no levels, so neither langchain nor this repo adds `thinking` there. With
+  no effort set, the spec stays a plain string: an effort turns it into a model instance, and
+  `test_an_effort_does_not_change_the_tool_list` is what shows deepagents resolves the same middleware either
+  way. Re-check both on a langchain-anthropic bump.
 - **`.env` is loaded by the entry points, never at package import.** `config.py` used to call `load_dotenv()`
   at module scope, which meant importing the package applied a developer's personal configuration to every
   consumer — the test suite included. Three variables leaked and each fails differently: `LANGSMITH_TRACING`
   is the expensive one (below), `REA_MODEL` hands `build_agent()` a model whose harness profile may resolve a
   different middleware stack, and `REA_PROJECT_ROOT` repoints `PROJECT_ROOT`, which anchors `_pyproject`,
   `_documented_pins`, `_check_script_pin` and the documented-count test at some other checkout's files. None
-  raises. The ordering is the subtle half: `PROJECT_ROOT` and every model setting (`DEFAULT_MODEL`, `SUBAGENT_MODEL`, `ROLE_MODELS`) are evaluated
+  raises. The ordering is the subtle half: `PROJECT_ROOT` and every model and effort setting (`DEFAULT_MODEL`, `ROLE_MODELS`, `ROLE_EFFORTS`, …) are evaluated
   **at import**, not at use, so an entry point must load `.env` before importing the module rather than before
   calling into it — a `load_dotenv()` at the top of `main()` under a module-scope
   `from real_estate_agent import build_agent` runs second and is useless. `main.py` therefore keeps the call

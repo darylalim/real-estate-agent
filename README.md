@@ -200,6 +200,9 @@ one.
 | `REA_MODEL` | `anthropic:claude-opus-5-5` | Orchestrator. Keep the `provider:model` prefix: `require_api_key()` reads it to decide which key to demand, and assumes Anthropic without one. |
 | `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
 | `REA_MODEL_PROPERTY_SEARCH` / `REA_MODEL_MARKET_ANALYST` / `REA_MODEL_DOCUMENT_REVIEWER` / `REA_MODEL_CLIENT_LIAISON` | inherits `REA_SUBAGENT_MODEL` | One specialist. An explicit `build_agent(subagent_model=...)` beats all of these. |
+| `REA_EFFORT` | none sent (API default) | Orchestrator effort: `low`, `medium`, `high`, `xhigh`, `max`. Anything else stops startup. |
+| `REA_SUBAGENT_EFFORT` | inherits `REA_EFFORT` | Specialists' effort. |
+| `REA_EFFORT_PROPERTY_SEARCH` / `_MARKET_ANALYST` / `_DOCUMENT_REVIEWER` / `_CLIENT_LIAISON` | inherits `REA_SUBAGENT_EFFORT` | One specialist's effort. |
 
 **On the legacy `LANGCHAIN_*` names.** An earlier version of this table said they
 "no longer work". That is wrong, and worth stating precisely because the mistake
@@ -240,7 +243,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 98 tests, ~1.5s
+uv run pytest tests/ -q       # 103 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```

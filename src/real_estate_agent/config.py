@@ -15,7 +15,7 @@ without changing anything a test can see.
 
 Loading ``.env`` belongs to the entry points -- ``main.py`` and
 ``streamlit_app.py`` -- and the ordering there is load-bearing rather than
-tidy-looking. ``PROJECT_ROOT`` and every model setting below are read from the
+tidy-looking. ``PROJECT_ROOT`` and every model and effort setting below are read from the
 environment **at import time**, so an entry point has to load ``.env`` before importing this module, not
 merely before calling into it. ``main.py`` does that by keeping both the call
 and its ``real_estate_agent`` imports inside ``main()``;
@@ -86,6 +86,37 @@ def resolve_role_models(env: Mapping[str, str], fallback: str) -> dict[str, str]
 # and a strong one for the CMA is a config change, not a code change.
 ROLE_MODELS = resolve_role_models(os.environ, SUBAGENT_MODEL)
 
+# The API's effort levels. Unset means send none, so the API's own default
+# applies (`medium` on Opus 5.5, `high` on Sonnet 5.5) -- not "the lowest".
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def resolve_effort(env: Mapping[str, str], name: str) -> str | None:
+    """``env[name]`` if it is an effort level, ``None`` if unset or empty.
+
+    Anything else raises here, at import, naming the variable -- not as a 400
+    from the first specialist that happens to be delegated to.
+    """
+    value = env.get(name) or None
+    if value is not None and value not in EFFORT_LEVELS:
+        raise ValueError(f"{name}={value!r} is not an effort level; use one of {', '.join(EFFORT_LEVELS)}")
+    return value
+
+
+def resolve_role_efforts(env: Mapping[str, str], fallback: str | None) -> dict[str, str | None]:
+    """Each role's ``REA_EFFORT_<ROLE>``, else ``fallback``. Mirrors ``resolve_role_models``."""
+    return {
+        role: resolve_effort(env, role_variable("REA_EFFORT", role)) or fallback
+        for role in SUBAGENT_ROLES
+    }
+
+
+# Same shape as the models: the orchestrator reads REA_EFFORT alone, and each
+# specialist falls back role -> REA_SUBAGENT_EFFORT -> REA_EFFORT.
+DEFAULT_EFFORT = resolve_effort(os.environ, "REA_EFFORT")
+SUBAGENT_EFFORT = resolve_effort(os.environ, "REA_SUBAGENT_EFFORT") or DEFAULT_EFFORT
+ROLE_EFFORTS = resolve_role_efforts(os.environ, SUBAGENT_EFFORT)
+
 
 def run_config(
     thread_id: str,
@@ -126,8 +157,8 @@ def run_config(
     }
 
 
-def model_metadata() -> dict[str, str]:
-    """The models a run was built with, as flat metadata keys.
+def model_metadata() -> dict[str, str | None]:
+    """The models and efforts a run was built with, as flat metadata keys.
 
     Flat rather than one nested mapping because LangSmith filters on top-level
     keys, and "which runs had the analyst on Haiku" is the question these get
@@ -138,6 +169,10 @@ def model_metadata() -> dict[str, str]:
         "model": DEFAULT_MODEL,
         "subagent_model": SUBAGENT_MODEL,
         **{f"model_{role.replace('-', '_')}": spec for role, spec in ROLE_MODELS.items()},
+        # None, not omitted, when unset: "sent no effort" is a setting too.
+        "effort": DEFAULT_EFFORT,
+        "subagent_effort": SUBAGENT_EFFORT,
+        **{f"effort_{role.replace('-', '_')}": effort for role, effort in ROLE_EFFORTS.items()},
     }
 
 
@@ -157,6 +192,11 @@ _PROVIDER_KEYS = {
 }
 
 
+def provider_of(spec: str) -> str:
+    """The ``provider:`` prefix, or ``"anthropic"`` without one -- see ``DEFAULT_MODEL``."""
+    return spec.split(":", 1)[0] if ":" in spec else "anthropic"
+
+
 def require_api_key() -> None:
     """Fail fast with an actionable message instead of a 401 mid-run.
 
@@ -167,8 +207,7 @@ def require_api_key() -> None:
     """
     needed: set[str] = set()
     for spec in (DEFAULT_MODEL, *ROLE_MODELS.values()):
-        provider = spec.split(":", 1)[0] if ":" in spec else "anthropic"
-        variable = _PROVIDER_KEYS.get(provider)
+        variable = _PROVIDER_KEYS.get(provider_of(spec))
         if variable and not os.getenv(variable):
             needed.add(variable)
 

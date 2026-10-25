@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from deepagents import SubAgent
+from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 # Virtual paths, resolved against the FilesystemBackend root (the project dir).
@@ -29,7 +30,7 @@ def build_subagents(
     market_tools: list[BaseTool],
     document_tools: list[BaseTool],
     comms_tools: list[BaseTool],
-    models: Mapping[str, str] | None = None,
+    models: Mapping[str, str | BaseChatModel] | None = None,
 ) -> list[SubAgent]:
     """Assemble the four specialist subagents.
 

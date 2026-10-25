@@ -102,7 +102,9 @@ def _run(args: argparse.Namespace) -> int:
     from evals.target import make_target
     from real_estate_agent.agent import build_agent
     from real_estate_agent.config import (
+        DEFAULT_EFFORT,
         DEFAULT_MODEL,
+        ROLE_EFFORTS,
         ROLE_MODELS,
         model_metadata,
         require_api_key,
@@ -163,6 +165,9 @@ def _run(args: argparse.Namespace) -> int:
     low, high = (total * cost for cost in _COST_PER_EXAMPLE)
     specialists = ", ".join(f"{role} {spec}" for role, spec in ROLE_MODELS.items())
     print(f"{total} live agent runs on {DEFAULT_MODEL} (specialists: {specialists}):")
+    if DEFAULT_EFFORT or any(ROLE_EFFORTS.values()):
+        efforts = ", ".join(f"{role} {effort or 'default'}" for role, effort in ROLE_EFFORTS.items())
+        print(f"  effort: orchestrator {DEFAULT_EFFORT or 'default'}; {efforts}")
     for stem, examples in plan.items():
         print(f"  {DATASETS[stem][0]}: {len(examples)}")
     print(f"Estimated ${low:.2f}-${high:.2f}, plus {JUDGE_MODEL} grading.")
