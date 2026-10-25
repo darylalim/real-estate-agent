@@ -243,7 +243,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 104 tests, ~1.5s
+uv run pytest tests/ -q       # 106 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```
@@ -293,16 +293,30 @@ comp and drop weak ones — the first live run kept 4 of 8 for MLS-1085 and gave
 $455k–$500k against a raw $406,633–$497,308. So a correct answer states at least
 3 comps and no more than the tool found, and a range inside the raw spread;
 which side of value the list price sits on is a rubric line for the judge. The
-documents scenario reviews `evals/fixtures/documents/purchase-agreement.txt`, a
-synthetic contract with four planted checklist problems, copied into the
-workspace before each example.
+three documents scenarios review the synthetic files in `evals/fixtures/documents/`
+— a purchase agreement, a residential lease and a seller disclosure, each with
+four problems planted from the `document-review` skill's checklist for its type.
+All three are copied in for each documents example, so every query names its
+document; every other example runs against an empty documents folder, because a
+fixture lease beside the `no-legal-opinion` guardrail ("my lease says…") would
+give the agent a real lease to review in place of the one the user describes.
+The files to seed travel in each example's `inputs`, the only part of an example
+the target sees, so the uploader compares and writes `inputs` as well.
 
 ```bash
 uv run python -m evals.build_datasets          # regenerate the JSON (offline)
 uv run python -m evals.upload_datasets         # create or update in LangSmith; asks first
 uv run python -m evals.run_experiments --limit 2   # LIVE and billed; asks first
 uv run python -m evals.run_experiments --scenario cma-no-comps
+REA_MODEL_MARKET_ANALYST=anthropic:claude-sonnet-5-5 … uv run python -m evals.run_experiments --label B
 ```
+
+A configuration is a set of `REA_*` variables on the command line, never a
+flag: `config.py` reads them at import. `--label` names it — appended to the
+experiment name, recorded in its metadata beside every role's model and effort.
+`.env` fills in any variable the command line leaves unset, so a configuration
+meant as "the defaults" has to set each one explicitly; check the plan the
+runner prints before confirming.
 
 Building contacts nothing. Upload with `evals.upload_datasets`, not
 `langsmith dataset upload`: the CLI rejects an existing name, so it cannot

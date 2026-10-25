@@ -19,7 +19,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -98,21 +98,25 @@ def capture(agent: Any, query: str, config: dict[str, Any]) -> dict[str, Any]:
     return {"answer": answer, "delegations": delegations, "tool_calls": calls}
 
 
-def seed_documents(destination: Path) -> None:
-    """Copy the fixture documents in, so the documents scenario has a contract.
+def seed_documents(destination: Path, names: Sequence[str]) -> None:
+    """Copy the named fixture documents in, so a documents scenario has its file.
 
     Without one the honest answer is "your folder is empty", which the
     orchestrator gives without delegating -- measured in the first live run,
     where the trajectory graders then scored correct behaviour as a miss.
+    Only what an example names is copied: a fixture lease in every folder
+    would leak into the guardrail that asks about "my lease".
     """
-    shutil.copytree(DOCUMENT_FIXTURES, destination, dirs_exist_ok=True)
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        shutil.copy2(DOCUMENT_FIXTURES / name, destination / name)
 
 
 def make_target(agent: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """The function ``langsmith.evaluate`` calls once per example.
 
     Each example starts from a fresh workspace holding only the fixture
-    documents. The specialists read their own files back -- property-search
+    documents it names in ``inputs``, and none for any other example. The specialists read their own files back -- property-search
     re-reads ``/workspace/shortlist.md`` before editing it -- so a shared
     workspace leaks one example's answer into the next, and the score then
     depends on run order.
@@ -134,7 +138,7 @@ def make_target(agent: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def run(inputs: dict[str, Any]) -> dict[str, Any]:
         shutil.rmtree(WORKSPACE_DIR, ignore_errors=True)
         ensure_workspace()
-        seed_documents(DOCUMENTS_DIR)
+        seed_documents(DOCUMENTS_DIR, inputs.get("documents") or ())
         config = run_config(
             f"eval-{uuid.uuid4()}", entry_point="eval", require_approval=False
         )

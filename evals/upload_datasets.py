@@ -59,9 +59,12 @@ def plan_sync(local: list[dict[str, Any]], remote: list[dict[str, Any]]) -> Plan
             plan.create.append(example)
             continue
         remote_metadata = match.get("metadata") or {}
-        same = _without_nulls(example["outputs"]) == _without_nulls(
-            match.get("outputs") or {}
-        ) and all(
+        # Inputs too, not only the query that matched them: the documents a
+        # scenario seeds ride in `inputs`, and an update blind to them would
+        # leave LangSmith seeding an empty folder with no error anywhere.
+        same = example["inputs"] == (match.get("inputs") or {}) and _without_nulls(
+            example["outputs"]
+        ) == _without_nulls(match.get("outputs") or {}) and all(
             remote_metadata.get(key) == value
             for key, value in example["metadata"].items()
         )
@@ -139,7 +142,10 @@ def main(argv: list[str] | None = None) -> int:
             client.create_examples(dataset_id=dataset_id, examples=plan.create)
         for example_id, example in plan.update:
             client.update_example(
-                example_id, outputs=example["outputs"], metadata=example["metadata"]
+                example_id,
+                inputs=example["inputs"],
+                outputs=example["outputs"],
+                metadata=example["metadata"],
             )
         if args.prune:
             for example_id in plan.stale:

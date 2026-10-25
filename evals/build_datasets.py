@@ -64,34 +64,73 @@ MIN_COMPS = 3
 # right direction. Closer than this, "about right" is a defensible reading.
 POSITION_MARGIN_PCT = 5
 
-# The purchase agreement's planted problems, each from the document-review
-# skill's checklist: (text that must appear in the fixture, rubric line). The
-# build fails if an edit to the fixture removes one, rather than uploading a
-# rubric that asks the reviewer to find a clause that is no longer there.
-PLANTED_CLAUSES = (
-    (
-        "within two (2) days after acceptance",
-        "Flag the two-day inspection objection period as very tight.",
-    ),
-    (
-        "non-refundable to Buyer for any reason",
-        "Flag that the earnest money is non-refundable.",
-    ),
-    (
-        "forty-five (45) days after closing",
+# Each fixture's planted problems, every one from the document-review skill's
+# checklist for that document type: (text that must appear in the fixture,
+# rubric line). The build fails if an edit to a fixture removes one, rather
+# than uploading a rubric that asks the reviewer to find a clause that is no
+# longer there -- and fails on any file in the fixtures folder not listed here.
+DOCUMENT_REVIEWS: dict[str, tuple[tuple[str, str], ...]] = {
+    "purchase-agreement.txt": (
         (
-            "Flag the seller's 45-day possession after closing with no written "
-            "rent-back or daily rate."
+            "within two (2) days after acceptance",
+            "Flag the two-day inspection objection period as very tight.",
+        ),
+        (
+            "non-refundable to Buyer for any reason",
+            "Flag that the earnest money is non-refundable.",
+        ),
+        (
+            "forty-five (45) days after closing",
+            (
+                "Flag the seller's 45-day possession after closing with no written "
+                "rent-back or daily rate."
+            ),
+        ),
+        (
+            "conventional mortgage loan that Buyer intends",
+            (
+                "Say there is no financing contingency even though the buyer is "
+                "financing the purchase."
+            ),
         ),
     ),
-    (
-        "conventional mortgage loan that Buyer intends",
+    "residential-lease.txt": (
         (
-            "Say there is no financing contingency even though the buyer is "
-            "financing the purchase."
+            "returned at Landlord's sole discretion",
+            "Flag that the security deposit has no stated return timeline.",
+        ),
+        (
+            "compounding daily",
+            "Flag the late fee that compounds daily and starts with no grace period.",
+        ),
+        (
+            "including the roof, plumbing, electrical system, and water heater",
+            "Flag that the tenant is responsible for repairs to major systems such as the roof and plumbing.",
+        ),
+        (
+            "may enter the Premises at any time without notice",
+            "Flag that the landlord may enter with no notice.",
         ),
     ),
-)
+    "seller-disclosure.txt": (
+        (
+            "Age of roof: Unknown",
+            "Flag 'Unknown' for the roof's age, which a current owner would ordinarily know.",
+        ),
+        (
+            "No permit was obtained for the conversion",
+            "Flag the unpermitted garage-to-bedroom conversion.",
+        ),
+        (
+            "rainwater entered the lower level",
+            "Flag the 2024 water intrusion and ask for evidence of remediation.",
+        ),
+        (
+            "Lead-based paint disclosure attached: No",
+            "Flag that a 1964 home has no lead-based paint disclosure attached.",
+        ),
+    ),
+}
 
 # (LangSmith dataset name, description), keyed by the local file stem.
 DATASETS: dict[str, tuple[str, str]] = {
@@ -225,20 +264,26 @@ class _Truth:
         }
 
 
-def _documents_truth() -> dict[str, Any]:
-    """Rubric lines for the planted clauses, once each is confirmed present."""
-    fixtures = sorted(
-        p for p in DOCUMENT_FIXTURES.iterdir() if not p.name.startswith(".")
-    )
-    if [path.name for path in fixtures] != ["purchase-agreement.txt"]:
-        raise ValueError(f"expected one purchase agreement in {DOCUMENT_FIXTURES}")
-    text = " ".join(fixtures[0].read_text(encoding="utf-8").split())
-    for anchor, _line in PLANTED_CLAUSES:
+def _document_fixtures() -> list[str]:
+    """The fixture file names, checked against ``DOCUMENT_REVIEWS`` both ways."""
+    found = sorted(p.name for p in DOCUMENT_FIXTURES.iterdir() if not p.name.startswith("."))
+    if found != sorted(DOCUMENT_REVIEWS):
+        raise ValueError(
+            f"{DOCUMENT_FIXTURES} holds {found}; DOCUMENT_REVIEWS describes {sorted(DOCUMENT_REVIEWS)}"
+        )
+    return found
+
+
+def _documents_truth(name: str) -> dict[str, Any]:
+    """Rubric lines for one fixture's planted clauses, once each is confirmed present."""
+    _document_fixtures()
+    text = " ".join((DOCUMENT_FIXTURES / name).read_text(encoding="utf-8").split())
+    for anchor, _line in DOCUMENT_REVIEWS[name]:
         if anchor not in text:
-            raise ValueError(f"the fixture no longer contains {anchor!r}")
+            raise ValueError(f"{name} no longer contains {anchor!r}")
     return {
-        "document": fixtures[0].name,
-        "must": [line for _anchor, line in PLANTED_CLAUSES],
+        "document": name,
+        "must": [line for _anchor, line in DOCUMENT_REVIEWS[name]],
         "must_not": ["State whether any clause is or is not enforceable."],
     }
 
@@ -396,7 +441,23 @@ SCENARIOS: tuple[Scenario, ...] = (
         delegations=("document-reviewer",),
         # `list_documents` is the checkable half of "never guess a filename".
         required_tools=("list_documents", "extract_document_text"),
-        truth=lambda _t: _documents_truth(),
+        truth=lambda _t: _documents_truth("purchase-agreement.txt"),
+    ),
+    Scenario(
+        id="documents-review-lease",
+        query="Review the residential lease in my documents folder and flag anything unusual.",
+        category="documents",
+        delegations=("document-reviewer",),
+        required_tools=("list_documents", "extract_document_text"),
+        truth=lambda _t: _documents_truth("residential-lease.txt"),
+    ),
+    Scenario(
+        id="documents-review-disclosure",
+        query="Review the seller disclosure in my documents folder and flag anything unusual.",
+        category="documents",
+        delegations=("document-reviewer",),
+        required_tools=("list_documents", "extract_document_text"),
+        truth=lambda _t: _documents_truth("seller-disclosure.txt"),
     ),
 )
 
@@ -503,7 +564,18 @@ def build_all() -> dict[str, list[dict[str, Any]]]:
             facts = scenario.truth(truth) if scenario.truth is not None else {}
             scenarios.append(
                 {
-                    "inputs": {"query": scenario.query},
+                    # Documents examples name the files to seed, since the
+                    # target sees only `inputs`; every other example runs
+                    # against an empty folder, so a fixture lease cannot leak
+                    # into the guardrail that asks about "my lease".
+                    "inputs": {
+                        "query": scenario.query,
+                        **(
+                            {"documents": _document_fixtures()}
+                            if scenario.category == "documents"
+                            else {}
+                        ),
+                    },
                     # Flat: fact keys and route keys never collide, and each
                     # evaluator reads only its own, scoring "not applicable"
                     # when they are absent.

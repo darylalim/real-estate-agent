@@ -3,6 +3,13 @@
     uv run python -m evals.run_experiments                       # both datasets
     uv run python -m evals.run_experiments --dataset guardrails --limit 2
     uv run python -m evals.run_experiments --scenario cma-no-comps
+    REA_MODEL_MARKET_ANALYST=... uv run python -m evals.run_experiments --label B
+
+A configuration is the ``REA_*`` variables on the command line, never a flag:
+``config.py`` reads them at import. ``load_dotenv`` fills in any the command
+line leaves unset from ``.env``, so a configuration meant as "the defaults" has
+to set every model and effort variable explicitly -- check the plan this prints
+before confirming.
 
 **Every example is a live multi-agent run, billed.** This asks before spending,
 with an estimate, unless ``--yes`` is passed. ``.claude/hooks/confirm-live-run.sh``
@@ -28,6 +35,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -75,6 +83,11 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         metavar="ID",
         help="run only this scenario id (repeatable); ignores --limit",
     )
+    parser.add_argument(
+        "--label",
+        default=None,
+        help="name this configuration (e.g. A, B, C): appended to the experiment name and recorded in its metadata",
+    )
     parser.add_argument("--yes", action="store_true", help="skip the cost confirmation")
     return parser.parse_args(argv)
 
@@ -106,7 +119,6 @@ def _run(args: argparse.Namespace) -> int:
         DEFAULT_MODEL,
         ROLE_EFFORTS,
         ROLE_MODELS,
-        model_metadata,
         require_api_key,
     )
 
@@ -164,7 +176,8 @@ def _run(args: argparse.Namespace) -> int:
     total = sum(len(examples) for examples in plan.values())
     low, high = (total * cost for cost in _COST_PER_EXAMPLE)
     specialists = ", ".join(f"{role} {spec}" for role, spec in ROLE_MODELS.items())
-    print(f"{total} live agent runs on {DEFAULT_MODEL} (specialists: {specialists}):")
+    label = f"configuration {args.label}: " if args.label else ""
+    print(f"{label}{total} live agent runs on {DEFAULT_MODEL} (specialists: {specialists}):")
     if DEFAULT_EFFORT or any(ROLE_EFFORTS.values()):
         efforts = ", ".join(f"{role} {effort or 'default'}" for role, effort in ROLE_EFFORTS.items())
         print(f"  effort: orchestrator {DEFAULT_EFFORT or 'default'}; {efforts}")
@@ -184,14 +197,32 @@ def _run(args: argparse.Namespace) -> int:
             target,
             data=examples,
             evaluators=evaluators_for(stem, judge),
-            experiment_prefix=stem,
+            experiment_prefix=experiment_prefix(stem, args.label),
             # One at a time: the target empties the shared workspace before each
             # example, so concurrent examples would delete each other's files.
             max_concurrency=1,
-            metadata={**model_metadata(), "judge_model": JUDGE_MODEL},
+            metadata=experiment_metadata(args.label),
             client=client,
         )
     return 0
+
+
+# Below `main` and `_run`, like every function here that imports the package:
+# test_the_eval_entry_points_set_their_environment_before_importing_the_package
+# reads import order lexically.
+def experiment_prefix(stem: str, label: str | None) -> str:
+    """The experiment's name in LangSmith, which is what the comparison view lists."""
+    return f"{stem}-{label}" if label else stem
+
+
+def experiment_metadata(label: str | None) -> dict[str, Any]:
+    """What an experiment records about the build it graded: every role's model
+    and effort, the judge, and the label. Imports the package, so call it only
+    once the environment is set -- see the module docstring."""
+    from evals.evaluators import JUDGE_MODEL
+    from real_estate_agent.config import model_metadata
+
+    return {**model_metadata(), "judge_model": JUDGE_MODEL, "label": label}
 
 
 if __name__ == "__main__":

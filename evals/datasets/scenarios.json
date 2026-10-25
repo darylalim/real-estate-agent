@@ -344,7 +344,12 @@
   },
   {
     "inputs": {
-      "query": "Review the purchase agreement in my documents folder and flag anything unusual."
+      "query": "Review the purchase agreement in my documents folder and flag anything unusual.",
+      "documents": [
+        "purchase-agreement.txt",
+        "residential-lease.txt",
+        "seller-disclosure.txt"
+      ]
     },
     "outputs": {
       "category": "documents",
@@ -369,6 +374,76 @@
     },
     "metadata": {
       "scenario": "documents-review-purchase-agreement",
+      "category": "documents"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Review the residential lease in my documents folder and flag anything unusual.",
+      "documents": [
+        "purchase-agreement.txt",
+        "residential-lease.txt",
+        "seller-disclosure.txt"
+      ]
+    },
+    "outputs": {
+      "category": "documents",
+      "document": "residential-lease.txt",
+      "must": [
+        "Flag that the security deposit has no stated return timeline.",
+        "Flag the late fee that compounds daily and starts with no grace period.",
+        "Flag that the tenant is responsible for repairs to major systems such as the roof and plumbing.",
+        "Flag that the landlord may enter with no notice."
+      ],
+      "must_not": [
+        "State whether any clause is or is not enforceable."
+      ],
+      "expected_delegations": [
+        "document-reviewer"
+      ],
+      "required_tools": [
+        "list_documents",
+        "extract_document_text"
+      ],
+      "forbidden_tools": []
+    },
+    "metadata": {
+      "scenario": "documents-review-lease",
+      "category": "documents"
+    }
+  },
+  {
+    "inputs": {
+      "query": "Review the seller disclosure in my documents folder and flag anything unusual.",
+      "documents": [
+        "purchase-agreement.txt",
+        "residential-lease.txt",
+        "seller-disclosure.txt"
+      ]
+    },
+    "outputs": {
+      "category": "documents",
+      "document": "seller-disclosure.txt",
+      "must": [
+        "Flag 'Unknown' for the roof's age, which a current owner would ordinarily know.",
+        "Flag the unpermitted garage-to-bedroom conversion.",
+        "Flag the 2024 water intrusion and ask for evidence of remediation.",
+        "Flag that a 1964 home has no lead-based paint disclosure attached."
+      ],
+      "must_not": [
+        "State whether any clause is or is not enforceable."
+      ],
+      "expected_delegations": [
+        "document-reviewer"
+      ],
+      "required_tools": [
+        "list_documents",
+        "extract_document_text"
+      ],
+      "forbidden_tools": []
+    },
+    "metadata": {
+      "scenario": "documents-review-disclosure",
       "category": "documents"
     }
   }

@@ -1530,20 +1530,84 @@ def test_the_eval_target_seeds_the_contract_the_documents_scenario_reviews(
     behaviour as a miss. The fixture is what makes delegating correct, and the
     real `extract_document_text` must be able to read it once seeded -- a
     fixture the tool rejects would put the scenario straight back there.
+
+    Every planted anchor is checked through the tool, not only in the file:
+    an anchor the extractor splits or drops is one no reviewer can find.
+    An example that names no documents gets an empty folder.
     """
+    from evals.build_datasets import DOCUMENT_REVIEWS
     from evals.target import seed_documents
 
-    seed_documents(tmp_path)
-    assert [path.name for path in tmp_path.iterdir()] == ["purchase-agreement.txt"]
+    names = sorted(DOCUMENT_REVIEWS)
+    assert names == ["purchase-agreement.txt", "residential-lease.txt", "seller-disclosure.txt"]
+    seed_documents(tmp_path, names)
+    assert sorted(path.name for path in tmp_path.iterdir()) == names
 
     monkeypatch.setattr(documents, "DOCUMENTS_DIR", tmp_path)
     tools = {tool.name: tool for tool in make_document_tools()}
     listed = json.loads(tools["list_documents"].invoke({}))
-    assert [doc["filename"] for doc in listed["documents"]] == ["purchase-agreement.txt"]
-    extracted = json.loads(
-        tools["extract_document_text"].invoke({"filename": "purchase-agreement.txt"})
-    )
-    assert "non-refundable to Buyer for any reason" in extracted["text"]
+    assert sorted(doc["filename"] for doc in listed["documents"]) == names
+    for name, clauses in DOCUMENT_REVIEWS.items():
+        extracted = json.loads(tools["extract_document_text"].invoke({"filename": name}))
+        text = " ".join(extracted["text"].split())
+        for anchor, _line in clauses:
+            assert anchor in text, f"{name}: {anchor!r} does not survive extraction"
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    seed_documents(empty, [])
+    assert list(empty.iterdir()) == []
+
+
+def test_only_document_examples_seed_documents() -> None:
+    """A lease in every folder would leak into the no-legal-opinion guardrail.
+
+    That guardrail asks about "my lease"; with `residential-lease.txt` seeded
+    beside it the agent may review the fixture instead, and the guardrail's
+    score would move for reasons no configuration caused. So the documents
+    to seed travel in each example's `inputs`, which is all the target sees,
+    and only documents examples carry any. Their queries must each name their
+    own document, since all three files are in the folder.
+    """
+    from evals.build_datasets import DOCUMENT_REVIEWS, build_all
+
+    built = build_all()
+    for stem, examples in built.items():
+        for example in examples:
+            seeded = example["inputs"].get("documents")
+            if example["metadata"]["category"] != "documents":
+                assert seeded is None, example["metadata"]["scenario"]
+                continue
+            assert seeded == sorted(DOCUMENT_REVIEWS), stem
+            reviewed = example["outputs"]["document"]
+            kind = reviewed.removesuffix(".txt").split("-")[-1]
+            assert kind in example["inputs"]["query"].lower(), (reviewed, example["inputs"]["query"])
+    reviewed_set = {
+        e["outputs"]["document"] for e in built["scenarios"] if e["metadata"]["category"] == "documents"
+    }
+    assert reviewed_set == set(DOCUMENT_REVIEWS)
+
+
+def test_an_experiment_records_its_label_and_every_role() -> None:
+    """Three configurations of one dataset must be told apart in LangSmith.
+
+    The label goes into the experiment's name, which is what the comparison
+    view lists, and into its metadata beside every specialist's model and
+    effort -- not only the orchestrator's and the shared fallback, which two
+    configurations differing in one role would report identically.
+    """
+    from evals.run_experiments import experiment_metadata, experiment_prefix
+    from real_estate_agent.config import SUBAGENT_ROLES
+
+    assert experiment_prefix("scenarios", "B") == "scenarios-B"
+    assert experiment_prefix("scenarios", None) == "scenarios"
+    metadata = experiment_metadata("B")
+    assert metadata["label"] == "B"
+    assert metadata["judge_model"]
+    for role in SUBAGENT_ROLES:
+        snake = role.replace("-", "_")
+        assert f"model_{snake}" in metadata
+        assert f"effort_{snake}" in metadata
 
 
 def test_the_eval_uploader_plans_in_place_updates() -> None:
@@ -1576,6 +1640,13 @@ def test_the_eval_uploader_plans_in_place_updates() -> None:
     # Metadata missing remotely -- a CLI upload -- is a change to write.
     no_metadata = {**example("same", a=1), "id": "id-same", "metadata": None}
     assert [example_id for example_id, _ in plan_sync(local[:1], [no_metadata]).update] == ["id-same"]
+
+    # Inputs beyond the query are compared too. The documents to seed ride in
+    # `inputs`; an uploader blind to them would leave LangSmith's examples
+    # seeding an empty folder -- the first live run's defect -- with no error.
+    seeded = {**example("same", a=1), "inputs": {"query": "same", "documents": ["a.txt"]}}
+    stale_inputs = {**example("same", a=1), "id": "id-same"}
+    assert [example_id for example_id, _ in plan_sync([seeded], [stale_inputs]).update] == ["id-same"]
 
 
 # --- streamlit app --------------------------------------------------------
