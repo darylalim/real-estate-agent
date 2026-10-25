@@ -1106,6 +1106,34 @@ def test_an_explicit_subagent_effort_beats_a_per_role_variable(monkeypatch) -> N
     assert isinstance(from_env["property-search"], str)
 
 
+def test_the_judge_sends_no_sampling_parameters(monkeypatch) -> None:
+    """Built offline from the request payload; nothing is sent.
+
+    Haiku 5.5 rejects a non-default `temperature` with a 400 -- on API version
+    2023-06-01, which this SDK sends, it must be exactly 1, and on 2026-10-21
+    any value fails. The judge pinned `temperature=0` for Haiku 4.5, so moving
+    the model alone would have broken every rubric grade on its first call,
+    and nothing offline calls the judge. The model id is the bare one: a date
+    suffix pins a snapshot the Haiku 5.5 docs say not to construct.
+
+    `extra_body` is checked as well as the top level, and that is the half
+    that matters: on `anthropic>=1` langchain-anthropic does not drop a
+    sampling parameter, it moves it into `extra_body`, where it is still sent.
+    Measured: the old judge's payload has no top-level `temperature` and
+    `extra_body == {"temperature": 0.0}`, so a top-level check passes on a
+    judge that 400s.
+    """
+    from evals.evaluators import JUDGE_MODEL, make_judge
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    assert JUDGE_MODEL == "anthropic:claude-haiku-5-5"
+    binding = cast(Any, make_judge()).first
+    sent = binding.bound._get_request_payload([("human", "x")], **binding.kwargs)
+    sampling = {"temperature", "top_p", "top_k"}
+    assert not sampling & set(sent)
+    assert not sampling & set(sent.get("extra_body") or {})
+
+
 # --- evaluation datasets --------------------------------------------------
 #
 # `evals/datasets/*.json` is ground truth computed from the mock and committed so

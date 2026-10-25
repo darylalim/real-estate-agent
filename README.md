@@ -243,7 +243,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 103 tests, ~1.5s
+uv run pytest tests/ -q       # 104 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```
@@ -282,7 +282,7 @@ experiment runs one dataset, and every answer here is a live multi-agent run.
 
 `evals/evaluators.py` holds the graders: code for anything a pattern can
 decide (cited ids, stated figures, delegation order, required and forbidden
-tools, a successful `save_draft`), and one AI grader on Claude Haiku 4.5 for
+tools, a successful `save_draft`), and one AI grader on Claude Haiku 5.5 for
 what it cannot — the guardrail rubrics, and flags such as "presented a thin
 comp set as a rough indication". A grader that does not apply to an example
 scores `None`, never a pass, so a skipped check cannot lift an average.
@@ -321,6 +321,12 @@ example's shortlist into the next.
 and every grader against hand-built runs. Live coverage is thin: a four-example
 smoke run, which is what exposed the CMA and documents graders scoring correct
 behaviour as wrong.
+
+The grader moved from Haiku 4.5 at `temperature=0` to Haiku 5.5, which rejects
+any non-default sampling parameter, so grading is no longer pinned to a
+temperature. Rubric scores from before that change and after it are not
+directly comparable; compare experiments graded by the same `judge_model`,
+which every experiment records in its metadata.
 
 ### CI
 

@@ -26,7 +26,11 @@ from typing import Any, TypedDict
 from langchain.chat_models import init_chat_model
 from langchain_core.runnables import Runnable
 
-JUDGE_MODEL = "anthropic:claude-haiku-4-5-20251001"
+# Bare id, no date suffix. Haiku 5.5 rejects non-default sampling parameters,
+# so the judge sets none: grading is no longer pinned to temperature 0, and
+# nothing replaces it. The rubric's structure (one verdict per requirement,
+# reasoning before `met`) is what keeps it steady now.
+JUDGE_MODEL = "anthropic:claude-haiku-5-5"
 
 Evaluator = Callable[..., dict[str, Any]]
 
@@ -359,8 +363,15 @@ def judge_prompt(
 
 
 def make_judge(model: str = JUDGE_MODEL) -> Runnable:
-    """The structured-output model behind ``rubric``. Needs the provider's key."""
-    return init_chat_model(model, temperature=0).with_structured_output(Grade)
+    """The structured-output model behind ``rubric``. Needs the provider's key.
+
+    ``with_structured_output`` defaults to a forced ``tool_choice`` here, which
+    Haiku 5.5 accepts with thinking on but answers without a thinking block.
+    That is acceptable for a grader whose schema already asks for ``reasoning``
+    before ``met``; Opus 5.5 and Sonnet 5.5 would reject it outright, so moving
+    the judge to either needs ``method="json_schema"``.
+    """
+    return init_chat_model(model).with_structured_output(Grade)
 
 
 def make_rubric(judge: Runnable) -> Evaluator:
