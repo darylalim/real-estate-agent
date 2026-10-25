@@ -13,7 +13,7 @@ are two halves of one thing. Drop the flag and results stop rendering entirely;
 drop the guard and the payload silently comes back.
 
 **A stateful expander's identity is its parameters, not its position.** Measured
-on 1.60 and re-measured on 1.62 and 1.64: two ``st.expander`` calls with the same label
+on 1.60 and re-measured on 1.62, 1.64 and 1.66: two ``st.expander`` calls with the same label
 and no key raise ``StreamlitDuplicateElementId`` and the run stops at the second
 one -- whatever rendered above it stays, and *nothing* below it renders,
 while two with different labels coexist. So the moment an expander becomes stateful, any two

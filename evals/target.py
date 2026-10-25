@@ -5,7 +5,7 @@ and rubric checks, and every tool call -- the specialists' included -- for the
 trajectory checks.
 
 **Capturing the specialists' calls needs ``subgraphs=True``.** Measured on
-deepagents 0.7.21 with a scripted model in the real graph: the checkpointed
+deepagents 0.7.21, and again on 0.7.32, with a scripted model in the real graph: the checkpointed
 state, which is what ``stream_mode="values"`` replays and what the CLI renders,
 holds the orchestrator's messages only. A specialist's ``search_listings`` call
 never appears in it -- the orchestrator sees just the ``task`` result. With

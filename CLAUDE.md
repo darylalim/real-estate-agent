@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A real estate agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.7.21: an
+A real estate agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.7.32: an
 orchestrator that holds no domain tools and delegates to four specialists over a shared `/workspace/` filesystem.
 
 `README.md` is current and detailed — it covers the safety rationale, the live-run verification table, and the
@@ -27,7 +27,7 @@ uv run python main.py --require-approval         # pause before save_draft
 uv run python main.py --thread <id>              # continue a conversation (persisted to workspace/)
 
 uv run streamlit run streamlit_app.py            # the same agent in a browser, plus a market dashboard
-uv run --no-sync streamlit docs st.metric        # exact signature + docstring on the *installed* 1.64
+uv run --no-sync streamlit docs st.metric        # exact signature + docstring on the *installed* 1.66
 
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
@@ -68,8 +68,10 @@ disagreeing. CI now runs the same script on every push and PR, so the pin holds 
 below. Bump a pin deliberately, don't drop it. The dev dependencies are `pytest` and `langsmith`, and the
 second is declared rather than inherited: `tests/` imports `tracing_is_enabled` from it at module scope, and
 langsmith *also* arrives transitively through `deepagents` and `langchain-core`. So deleting the entry leaves
-the suite green today and breaks it the day that transitive path changes — measured, `uv run --no-dev python
--c "import langsmith.utils"` still imports 0.14.2. A direct import gets a direct declaration.
+the suite green today and breaks it the day that transitive path changes — measured, `uv run --isolated --no-dev
+python -c "import langsmith.utils"` still imports 0.14.12. `--isolated` is what makes that a measurement:
+`uv run` syncs inexactly, so in the warm `.venv` the dev group is still installed and a plain `--no-dev`
+import succeeds whether or not the transitive path exists. A direct import gets a direct declaration.
 `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
 
 **`ruff check` yes, `ruff format` no.** The formatter would rewrite 10 of the 29 Python files — line-wrapping
@@ -366,7 +368,7 @@ property-search workflow is not.
 `.streamlit/config.toml`.
 
 **Check Streamlit against the installed package, not against memory or the web docs.** `uv run --no-sync
-streamlit docs st.<command>` prints the real 1.64 signature and docstring, and the version-matched reference
+streamlit docs st.<command>` prints the real 1.66 signature and docstring, and the version-matched reference
 docs the `developing-with-streamlit` skill routes to are inside the venv — locate them with `python3
 ~/.claude/skills/developing-with-streamlit/scripts/discover.py --project-dir .` (`python3`, not `python`,
 which is not on PATH here). For a *rendering* claim, `AppTest` exposes the proto:
@@ -473,7 +475,7 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   A stable `key=` on that table was tried and **dropped**: the general advice is that an unkeyed
   dataframe's identity includes its data, so a filter change remounts it and loses the reader's sort —
   but measured on 1.60, sorting by price and then switching property type kept the sort *with and
-  without* the key, on a clean server restart each way. **Not re-measured on 1.62 or 1.64** — it needs a real
+  without* the key, on a clean server restart each way. **Not re-measured on 1.62, 1.64 or 1.66** — it needs a real
   browser, and `AppTest` cannot model a client-side sort. Don't re-add it on the strength of the advice
   alone; this table takes the default `on_select="ignore"`, and whatever the rule applies to, it is not
   this. Re-measure if that argument ever changes.
@@ -485,10 +487,10 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   **deliberately not** — it wraps a form, and a lazily rendered form widget loses its state, which is the
   dead-Load-button defect the README already lists.
   - `on_change="rerun"` is what makes `.open` a boolean; under the default `"ignore"` it is `None`, so
-    dropping the flag makes every guard false and results stop rendering *at all*. Still true on 1.62
-    and 1.64, measured directly: `.open` is `None` under the default and `False` under `on_change="rerun"`.
+    dropping the flag makes every guard false and results stop rendering *at all*. Still true on 1.62,
+    1.64 and 1.66, measured directly: `.open` is `None` under the default and `False` under `on_change="rerun"`.
   - **A lazy expander needs a key that varies, and a constant key is worse than none.** Measured on 1.60
-    and re-measured on 1.62 and 1.64 under `AppTest`: two same-label stateful expanders raise
+    and re-measured on 1.62, 1.64 and 1.66 under `AppTest`: two same-label stateful expanders raise
     `StreamlitDuplicateElementId` and the run stops there — what rendered above it stays, nothing below it
     renders; a shared constant key raises
     `StreamlitDuplicateElementKey` instead; two distinct keys both render. Identity is the **parameter tuple,
@@ -524,11 +526,11 @@ being written.
 - **Permission rules are order-sensitive: first match wins, and an unmatched path defaults to *allow*.** The
   allows in `WORKSPACE_PERMISSIONS` must precede the catch-all write deny. `test_permission_matrix` imports the
   live list rather than copying it, so reordering it fails the test.
-- **`write_todos` is not added automatically in deepagents — verified on 0.7.1, 0.7.8 and 0.7.21.** The
+- **`write_todos` is not added automatically in deepagents — verified on 0.7.1, 0.7.8, 0.7.21 and 0.7.32.** The
   middleware stack resolves from a per-`provider:model` harness profile, so planning may vanish just by
   changing the model string. `agent.py` pins `TodoListMiddleware()` explicitly. Re-verify on a version bump
   by building the graph both ways and diffing the tool list — `create_deep_agent(...)` with and without
-  `middleware=[TodoListMiddleware()]`; on 0.7.21 `write_todos` appears only in the pinned build. Note what
+  `middleware=[TodoListMiddleware()]`; on 0.7.32 `write_todos` appears only in the pinned build. Note what
   `test_agent_exposes_planning_and_delegation` cannot tell you: it collects names into a **set**, so a
   duplicate registration is invisible to it. That case has its own test —
   `test_planning_middleware_is_pinned_because_it_is_not_automatic` builds the graph both ways and goes red
