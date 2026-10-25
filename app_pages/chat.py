@@ -23,7 +23,7 @@ from langgraph.types import Command
 
 from real_estate_agent.config import (
     DEFAULT_MODEL,
-    SUBAGENT_MODEL,
+    ROLE_MODELS,
     require_api_key,
     run_config,
 )
@@ -206,8 +206,13 @@ with st.sidebar:
     _workspace_browser()
 
     st.caption(f"Orchestrator · `{DEFAULT_MODEL}`")
-    if SUBAGENT_MODEL != DEFAULT_MODEL:
-        st.caption(f"Specialists · `{SUBAGENT_MODEL}`")
+    specialist_models = set(ROLE_MODELS.values())
+    if len(specialist_models) > 1:
+        # Mixed: name every role, or the caption hides which one is the odd one out.
+        for role, spec in ROLE_MODELS.items():
+            st.caption(f"{role} · `{spec}`")
+    elif specialist_models != {DEFAULT_MODEL}:
+        st.caption(f"Specialists · `{specialist_models.pop()}`")
 
 agent = get_agent(st.session_state.require_approval)
 config = run_config(

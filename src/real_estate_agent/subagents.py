@@ -12,6 +12,8 @@ prompt, which is the whole criterion for skill-vs-prompt.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from deepagents import SubAgent
 from langchain_core.tools import BaseTool
 
@@ -27,13 +29,18 @@ def build_subagents(
     market_tools: list[BaseTool],
     document_tools: list[BaseTool],
     comms_tools: list[BaseTool],
-    model: str | None = None,
+    models: Mapping[str, str] | None = None,
 ) -> list[SubAgent]:
-    """Assemble the four specialist subagents."""
+    """Assemble the four specialist subagents.
+
+    ``models`` maps a subagent ``name`` to its model. A name it leaves out gets
+    no ``model`` key, which deepagents reads as "inherit the orchestrator's".
+    """
+    models = models or {}
 
     def _with_model(subagent: SubAgent) -> SubAgent:
-        if model:
-            subagent["model"] = model
+        if spec := models.get(subagent["name"]):
+            subagent["model"] = spec
         return subagent
 
     property_search: SubAgent = {
@@ -158,9 +165,10 @@ def build_subagents(
         "skills": [SKILL_CLIENT_COMMS],
     }
 
-    return [
-        _with_model(property_search),
-        _with_model(market_analyst),
-        _with_model(document_reviewer),
-        _with_model(client_liaison),
-    ]
+    subagents = [property_search, market_analyst, document_reviewer, client_liaison]
+    # A mistyped role would otherwise be ignored and its specialist would run on
+    # the orchestrator's model, which nothing downstream reports.
+    unknown = set(models) - {subagent["name"] for subagent in subagents}
+    if unknown:
+        raise ValueError(f"No specialist named {', '.join(sorted(unknown))}")
+    return [_with_model(subagent) for subagent in subagents]

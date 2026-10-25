@@ -176,7 +176,7 @@ def _turn(agent: Any, text: str, config: dict[str, Any], seen: set[str]) -> None
 
 def main() -> int:
     # `.env` has to be read before `real_estate_agent.config` is *imported*, not
-    # merely before it is used: PROJECT_ROOT, DEFAULT_MODEL and SUBAGENT_MODEL
+    # merely before it is used: PROJECT_ROOT and every model setting
     # are module constants evaluated at import time, so a `load_dotenv()` above
     # a module-scope `from real_estate_agent...` would run too late and silently
     # ignore REA_MODEL. Hence the call and the package imports both live here.

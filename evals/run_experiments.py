@@ -101,7 +101,12 @@ def _run(args: argparse.Namespace) -> int:
     from evals.evaluators import JUDGE_MODEL, evaluators_for, make_judge
     from evals.target import make_target
     from real_estate_agent.agent import build_agent
-    from real_estate_agent.config import DEFAULT_MODEL, SUBAGENT_MODEL, require_api_key
+    from real_estate_agent.config import (
+        DEFAULT_MODEL,
+        ROLE_MODELS,
+        model_metadata,
+        require_api_key,
+    )
 
     try:
         require_api_key()
@@ -156,7 +161,8 @@ def _run(args: argparse.Namespace) -> int:
 
     total = sum(len(examples) for examples in plan.values())
     low, high = (total * cost for cost in _COST_PER_EXAMPLE)
-    print(f"{total} live agent runs on {DEFAULT_MODEL} (subagents {SUBAGENT_MODEL}):")
+    specialists = ", ".join(f"{role} {spec}" for role, spec in ROLE_MODELS.items())
+    print(f"{total} live agent runs on {DEFAULT_MODEL} (specialists: {specialists}):")
     for stem, examples in plan.items():
         print(f"  {DATASETS[stem][0]}: {len(examples)}")
     print(f"Estimated ${low:.2f}-${high:.2f}, plus {JUDGE_MODEL} grading.")
@@ -177,11 +183,7 @@ def _run(args: argparse.Namespace) -> int:
             # One at a time: the target empties the shared workspace before each
             # example, so concurrent examples would delete each other's files.
             max_concurrency=1,
-            metadata={
-                "model": DEFAULT_MODEL,
-                "subagent_model": SUBAGENT_MODEL,
-                "judge_model": JUDGE_MODEL,
-            },
+            metadata={**model_metadata(), "judge_model": JUDGE_MODEL},
             client=client,
         )
     return 0

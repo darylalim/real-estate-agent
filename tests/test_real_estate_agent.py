@@ -915,6 +915,101 @@ def test_subagents_carry_their_own_skills() -> None:
     assert by_name["client-liaison"]["skills"] == ["/skills/client-comms"]
 
 
+# --- a model per specialist -----------------------------------------------
+
+
+def test_each_specialist_gets_the_model_configured_for_its_role() -> None:
+    """The role names in `config` are the `name`s `subagents.py` declares.
+
+    They are written in both places, so a renamed specialist would otherwise
+    leave its `REA_MODEL_<ROLE>` variable configuring nothing, with no error.
+    A role missing from the mapping gets no `model` key, which deepagents reads
+    as "inherit the orchestrator's".
+    """
+    from real_estate_agent.config import SUBAGENT_ROLES
+    from real_estate_agent.subagents import build_subagents
+
+    def build(models: dict[str, str] | None) -> dict[str, Any]:
+        subagents = build_subagents(
+            listing_tools=[], market_tools=[], document_tools=[], comms_tools=[], models=models
+        )
+        return {sub["name"]: sub for sub in subagents}
+
+    assert set(build(None)) == set(SUBAGENT_ROLES)
+    by_name = build({"market-analyst": "anthropic:claude-haiku-5-5"})
+    assert by_name["market-analyst"]["model"] == "anthropic:claude-haiku-5-5"
+    assert "model" not in by_name["property-search"]
+
+    with pytest.raises(ValueError, match="market-analist"):
+        build({"market-analist": "anthropic:claude-haiku-5-5"})
+
+
+def test_unset_roles_fall_back_to_the_shared_specialist_model() -> None:
+    """`REA_MODEL_<ROLE>` overrides one specialist; the rest keep `REA_SUBAGENT_MODEL`.
+
+    An empty value counts as unset, the way a blank line in `.env` reads.
+    """
+    from real_estate_agent.config import SUBAGENT_ROLES, resolve_role_models
+
+    env = {"REA_MODEL_MARKET_ANALYST": "anthropic:claude-haiku-5-5", "REA_MODEL_CLIENT_LIAISON": ""}
+    resolved = resolve_role_models(env, "anthropic:claude-sonnet-5-5")
+    assert resolved == {
+        role: "anthropic:claude-haiku-5-5" if role == "market-analyst" else "anthropic:claude-sonnet-5-5"
+        for role in SUBAGENT_ROLES
+    }
+
+
+def test_require_api_key_covers_a_model_only_one_role_uses(monkeypatch) -> None:
+    """A role on another provider would otherwise fail mid-run with a 401."""
+    from real_estate_agent import config
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(config, "DEFAULT_MODEL", "anthropic:claude-opus-5-5")
+    monkeypatch.setattr(config, "SUBAGENT_MODEL", "anthropic:claude-opus-5-5")
+    monkeypatch.setattr(
+        config,
+        "ROLE_MODELS",
+        {role: "anthropic:claude-opus-5-5" for role in config.SUBAGENT_ROLES}
+        | {"document-reviewer": "openai:gpt-5"},
+    )
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        config.require_api_key()
+
+
+def test_an_explicit_subagent_model_beats_a_per_role_variable(monkeypatch) -> None:
+    """Explicit arguments win over the environment, per-role variables included.
+
+    The scripted-model tests pass a fake as `subagent_model`. If an exported
+    `REA_MODEL_PROPERTY_SEARCH` -- which the step-4 experiments set -- could
+    override it, those tests would quietly route one specialist to a real,
+    billed model.
+    """
+    from real_estate_agent import agent
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    monkeypatch.setattr(
+        agent,
+        "ROLE_MODELS",
+        {role: "anthropic:claude-opus-5-5" for role in agent.SUBAGENT_ROLES}
+        | {"property-search": "anthropic:claude-haiku-5-5"},
+    )
+    seen: list[dict[str, str] | None] = []
+    real_build_subagents = agent.build_subagents
+
+    def spy(**kwargs: Any) -> Any:
+        seen.append(kwargs.get("models"))
+        return real_build_subagents(**kwargs)
+
+    monkeypatch.setattr(agent, "build_subagents", spy)
+
+    agent.build_agent(subagent_model="anthropic:claude-sonnet-5-5")
+    agent.build_agent()
+    explicit, from_env = seen
+    assert explicit == dict.fromkeys(agent.SUBAGENT_ROLES, "anthropic:claude-sonnet-5-5")
+    assert from_env is not None and from_env["property-search"] == "anthropic:claude-haiku-5-5"
+
+
 # --- evaluation datasets --------------------------------------------------
 #
 # `evals/datasets/*.json` is ground truth computed from the mock and committed so
@@ -2122,7 +2217,7 @@ def test_config_does_not_load_dotenv_at_import() -> None:
 def test_each_entry_point_loads_dotenv_before_the_package() -> None:
     """Loading `.env` after the import is too late, and looks identical.
 
-    `PROJECT_ROOT`, `DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated when
+    `PROJECT_ROOT` and every model setting are evaluated when
     `config.py` is imported, not when they are read. So moving `load_dotenv()`
     out of that module only works if each entry point calls it *before* the
     import — a `load_dotenv()` at the top of `main()` underneath a module-scope
@@ -2180,7 +2275,12 @@ def test_run_config_reaches_every_run_in_a_trace() -> None:
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.graph import END, START, StateGraph
 
-    from real_estate_agent.config import DEFAULT_MODEL, SUBAGENT_MODEL, run_config
+    from real_estate_agent.config import (
+        DEFAULT_MODEL,
+        ROLE_MODELS,
+        SUBAGENT_MODEL,
+        run_config,
+    )
 
     class Collector(BaseTracer):
         def __init__(self) -> None:
@@ -2218,6 +2318,10 @@ def test_run_config_reaches_every_run_in_a_trace() -> None:
     assert metadata["require_approval"] is True
     assert metadata["model"] == DEFAULT_MODEL
     assert metadata["subagent_model"] == SUBAGENT_MODEL
+    # Flat keys rather than one nested mapping: LangSmith filters on top-level
+    # metadata, and "which runs had the analyst on Haiku" is the question.
+    for role, role_model in ROLE_MODELS.items():
+        assert metadata[f"model_{role.replace('-', '_')}"] == role_model
     assert metadata["app_version"] == _pyproject()["project"]["version"]
 
     (step,) = [child for child in root.child_runs if child.name == "step"]

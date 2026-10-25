@@ -15,8 +15,8 @@ without changing anything a test can see.
 
 Loading ``.env`` belongs to the entry points -- ``main.py`` and
 ``streamlit_app.py`` -- and the ordering there is load-bearing rather than
-tidy-looking. The three values below are read from the environment **at import
-time**, so an entry point has to load ``.env`` before importing this module, not
+tidy-looking. ``PROJECT_ROOT`` and every model setting below are read from the
+environment **at import time**, so an entry point has to load ``.env`` before importing this module, not
 merely before calling into it. ``main.py`` does that by keeping both the call
 and its ``real_estate_agent`` imports inside ``main()``;
 ``streamlit_app.py`` gets it for free, since it imports no page module until
@@ -31,6 +31,7 @@ package supplies the environment the way any other library expects.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Literal
@@ -63,6 +64,27 @@ DEFAULT_MODEL = os.getenv("REA_MODEL", "anthropic:claude-opus-5-5")
 # Subagents inherit the orchestrator's model unless overridden. Kept separate
 # so cost/latency tuning is a config change, not a code change.
 SUBAGENT_MODEL = os.getenv("REA_SUBAGENT_MODEL", DEFAULT_MODEL)
+
+# The specialists, by the `name` each declares in subagents.py. Written in both
+# places, so test_each_specialist_gets_the_model_configured_for_its_role ties
+# them: a renamed specialist would otherwise leave its variable configuring
+# nothing.
+SUBAGENT_ROLES = ("property-search", "market-analyst", "document-reviewer", "client-liaison")
+
+
+def role_variable(prefix: str, role: str) -> str:
+    """``("REA_MODEL", "market-analyst")`` -> ``"REA_MODEL_MARKET_ANALYST"``."""
+    return f"{prefix}_{role.upper().replace('-', '_')}"
+
+
+def resolve_role_models(env: Mapping[str, str], fallback: str) -> dict[str, str]:
+    """Each role's ``REA_MODEL_<ROLE>``, else ``fallback``. Empty counts as unset."""
+    return {role: env.get(role_variable("REA_MODEL", role)) or fallback for role in SUBAGENT_ROLES}
+
+
+# One specialist can be tuned without the others: a cheap model for the search
+# and a strong one for the CMA is a config change, not a code change.
+ROLE_MODELS = resolve_role_models(os.environ, SUBAGENT_MODEL)
 
 
 def run_config(
@@ -97,11 +119,25 @@ def run_config(
         "tags": [entry_point],
         "metadata": {
             "entry_point": entry_point,
-            "model": DEFAULT_MODEL,
-            "subagent_model": SUBAGENT_MODEL,
+            **model_metadata(),
             "require_approval": require_approval,
             "app_version": app_version,
         },
+    }
+
+
+def model_metadata() -> dict[str, str]:
+    """The models a run was built with, as flat metadata keys.
+
+    Flat rather than one nested mapping because LangSmith filters on top-level
+    keys, and "which runs had the analyst on Haiku" is the question these get
+    opened to answer. Shared with ``evals.run_experiments`` so a trace and an
+    experiment describe the same build the same way.
+    """
+    return {
+        "model": DEFAULT_MODEL,
+        "subagent_model": SUBAGENT_MODEL,
+        **{f"model_{role.replace('-', '_')}": spec for role, spec in ROLE_MODELS.items()},
     }
 
 
@@ -124,11 +160,13 @@ _PROVIDER_KEYS = {
 def require_api_key() -> None:
     """Fail fast with an actionable message instead of a 401 mid-run.
 
-    Derived from the configured model's provider prefix, so overriding
+    Derived from each configured model's provider prefix, so overriding
     ``REA_MODEL`` to a non-Anthropic provider does not demand an Anthropic key.
+    Every resolved role is checked, not just the shared fallback: one specialist
+    on another provider would otherwise pass this and 401 when first delegated to.
     """
     needed: set[str] = set()
-    for spec in (DEFAULT_MODEL, SUBAGENT_MODEL):
+    for spec in (DEFAULT_MODEL, *ROLE_MODELS.values()):
         provider = spec.split(":", 1)[0] if ":" in spec else "anthropic"
         variable = _PROVIDER_KEYS.get(provider)
         if variable and not os.getenv(variable):

@@ -17,7 +17,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from real_estate_agent.config import (
     DEFAULT_MODEL,
     PROJECT_ROOT,
-    SUBAGENT_MODEL,
+    ROLE_MODELS,
+    SUBAGENT_ROLES,
     ensure_workspace,
 )
 from real_estate_agent.providers.base import ListingsProvider
@@ -101,7 +102,11 @@ def build_agent(
         provider: Listings data source. Defaults to the deterministic mock —
             pass a real ``ListingsProvider`` to take the agent live.
         model: Orchestrator model, as a LangChain ``provider:model`` string.
-        subagent_model: Model for the specialists. Defaults to ``model``.
+        subagent_model: Model for every specialist. Explicit arguments always
+            win over the environment, per-role variables included. When
+            omitted, each specialist takes its ``REA_MODEL_<ROLE>``, then
+            ``REA_SUBAGENT_MODEL``, then ``REA_MODEL`` -- the environment's
+            orchestrator model, not this call's ``model``.
         require_approval: When True, writing a client-facing draft pauses for
             human approval via the interrupt mechanism. Requires a checkpointer.
         checkpointer: LangGraph checkpointer. Defaults to ``InMemorySaver`` so
@@ -115,7 +120,8 @@ def build_agent(
 
     provider = provider or MockListingsProvider()
     model = model or DEFAULT_MODEL
-    subagent_model = subagent_model or SUBAGENT_MODEL
+    # Read at call time, not bound as a default, so tests can patch it.
+    role_models = dict.fromkeys(SUBAGENT_ROLES, subagent_model) if subagent_model else ROLE_MODELS
 
     listing_tools = make_listing_tools(provider)
     market_tools = make_market_tools(provider)
@@ -127,7 +133,7 @@ def build_agent(
         market_tools=market_tools,
         document_tools=document_tools,
         comms_tools=comms_tools,
-        model=subagent_model,
+        models=role_models,
     )
 
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = (

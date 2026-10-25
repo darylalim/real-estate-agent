@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 94 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 98 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -553,13 +553,21 @@ being written.
   a bare `gpt-4o` makes it demand `ANTHROPIC_API_KEY` and never check the key the run needs. **No test holds
   any of this.** `config.py`, `README.md` and `.env.example` all carried the same wrong claim until it was
   corrected alongside this line; a grep for `provider:model` is the check nobody ran.
+- **An explicit `build_agent(subagent_model=...)` beats every environment variable, per-role ones included.**
+  The order is explicit argument → `REA_MODEL_<ROLE>` → `REA_SUBAGENT_MODEL` → `REA_MODEL`. The scripted-model
+  tests pass a fake as `subagent_model`; if an exported `REA_MODEL_PROPERTY_SEARCH` could override it, one
+  specialist would quietly run on a real, billed model inside an "offline" suite.
+  `test_an_explicit_subagent_model_beats_a_per_role_variable` pins it. The role names live twice — the
+  `"name"` literals in `subagents.py` and `SUBAGENT_ROLES` in `config.py` — and
+  `test_each_specialist_gets_the_model_configured_for_its_role` ties them; `build_subagents` also raises on a
+  role it does not know, so a typo cannot fall back to the orchestrator's model unnoticed.
 - **`.env` is loaded by the entry points, never at package import.** `config.py` used to call `load_dotenv()`
   at module scope, which meant importing the package applied a developer's personal configuration to every
   consumer — the test suite included. Three variables leaked and each fails differently: `LANGSMITH_TRACING`
   is the expensive one (below), `REA_MODEL` hands `build_agent()` a model whose harness profile may resolve a
   different middleware stack, and `REA_PROJECT_ROOT` repoints `PROJECT_ROOT`, which anchors `_pyproject`,
   `_documented_pins`, `_check_script_pin` and the documented-count test at some other checkout's files. None
-  raises. The ordering is the subtle half: `PROJECT_ROOT`, `DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated
+  raises. The ordering is the subtle half: `PROJECT_ROOT` and every model setting (`DEFAULT_MODEL`, `SUBAGENT_MODEL`, `ROLE_MODELS`) are evaluated
   **at import**, not at use, so an entry point must load `.env` before importing the module rather than before
   calling into it — a `load_dotenv()` at the top of `main()` under a module-scope
   `from real_estate_agent import build_agent` runs second and is useless. `main.py` therefore keeps the call
