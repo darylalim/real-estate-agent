@@ -53,7 +53,7 @@ pythonpath = ["."]
 # different rule set, and still prints "All checks passed!" -- so "ruff clean"
 # would quietly mean something other than what CLAUDE.md claims. There is no
 # equivalent for ty: it has no required-version, so its pin stays a convention.
-required-version = "==0.16.1"
+required-version = "==0.17.2"
 # Deliberately no target-version. ruff infers py311 from requires-python -- the
 # floor the code must support -- exactly as ty infers 3.11 for its own checks.
 # Setting target-version = "py314" to "match" .python-version is the tempting
@@ -70,7 +70,11 @@ required-version = "==0.16.1"
 # a probe with a mutable default argument, a function-scoped import, and a blind
 # `except Exception` raises 1 error under the old select and 4 under the
 # defaults. Losing B006, BLE001 and DTZ005 for free was not a good trade.
-extend-select = ["I", "UP", "PLR0402"]
+# DTZ is selected explicitly because 0.17 took it *out* of the defaults: a
+# bare pin bump silently stopped reporting `datetime.now()` (DTZ005) and
+# `date.today()` (DTZ011) -- the call the mock's frozen `_TODAY` exists to
+# keep out. The prefix also adds DTZ002-004, stable and never defaults.
+extend-select = ["DTZ", "I", "UP", "PLR0402"]
 
 [tool.ty.terminal]
 # Warnings fail the check. Adopted while the codebase was at zero of them, which

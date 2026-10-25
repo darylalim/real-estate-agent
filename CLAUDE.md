@@ -41,8 +41,8 @@ uv run python -m evals.build_datasets            # regenerate evals/datasets/*.j
 uv run python -m evals.upload_datasets           # create/update the LangSmith datasets in place — not the CLI, which drops metadata
 uv run python -m evals.run_experiments --limit 2 # LIVE + billed: run the agent over uploaded datasets, grade in LangSmith
 
-uvx ty@0.0.65 check                              # type check — pinned; not a declared dependency
-uvx ruff@0.16.1 check .                          # lint — pinned; rule set in pyproject.toml
+uvx ty@0.0.91 check                              # type check — pinned; not a declared dependency
+uvx ruff@0.17.2 check .                          # lint — pinned; rule set in pyproject.toml
 ```
 
 **Prefer `scripts/check.sh`.** It is where the pins are enforced rather than described: a version inside a
@@ -59,7 +59,7 @@ pinned **in the command** rather than added to `pyproject.toml` as dependencies 
 ephemeral environment, so neither one's dependencies enter `uv.lock`, but that also hides the version. Both
 are pre-1.0 and their diagnostics move fast; unpinned, "clean" can flip between two runs on identical source.
 
-**ruff's pin is self-enforcing; ty's is enforced by the wrapper.** `required-version = "==0.16.1"` in
+**ruff's pin is self-enforcing; ty's is enforced by the wrapper.** `required-version = "==0.17.2"` in
 `pyproject.toml` makes a mismatched ruff hard-fail (exit 2) rather than silently applying a different rule
 set — verified against 0.15.0. ty has no such setting, so its pin holds only for callers who go through
 `scripts/check.sh`; `uvx ty check` typed directly still resolves whatever is newest. That is a real gap, just
@@ -82,13 +82,17 @@ denominators read 14 and 19 when first written and drifted in silence as the rep
 `test_documented_file_counts_match_the_tree` now gates them — a caveat telling the next reader to re-derive
 was the same instruction that had already failed once. The rewrite count needs the formatter itself and
 stays prose. A consequence worth knowing:
-blank-line and whitespace structure has no gate at all, since `E3` is preview-only in 0.16.1 and the
+blank-line and whitespace structure has no gate at all, since `E3` is preview-only in 0.17.2 and the
 formatter is the only other thing that would catch it.
 
 **The rule set is `extend-select`, not `select`.** Replacing the defaults outright looks like it protects
 against them widening across releases, but `required-version` already fixes which defaults apply, so the
 replacement bought nothing and silently dropped ~300 rules the codebase already passes — including `B006`,
-`BLE001`, and `DTZ005`. Add rules here; don't take the defaults away. A prior version of this file claimed the
+`BLE001`, and `DTZ005`. Add rules here; don't take the defaults away. **The defaults do move between
+releases, though, and a pin bump is when they do:** 0.17 dropped all seven default `DTZ` rules, so moving
+the pin from 0.16.1 printed "All checks passed!" while no longer checking `date.today()` — the call the
+mock's frozen `_TODAY` exists to keep out. `"DTZ"` is in `extend-select` for that reason. On every ruff
+bump, diff `ruff check --isolated --show-settings` between the two versions before trusting a green run. A prior version of this file claimed the
 function-scoped imports in `tests/` exist so `monkeypatch` can reach module globals. **That is false** — the
 test module already imports `real_estate_agent.tools.comms` at module scope, so the module object is in
 `sys.modules` regardless, and `monkeypatch.setattr` rebinds the same global either way. Those imports can be
@@ -215,8 +219,9 @@ trailing comment; bump both halves together.
 `test_ci_calls_the_check_script_rather_than_restating_it` scanned `^\s*run:\s*(.+?)\s*$` over the file,
 which captures the literal `|` off a `run: |` line and never descends into the body underneath it. Measured
 against the release job's first block scalar: the old regex returned
-`['uv sync --locked', 'scripts/check.sh --floor', '|', '>-']`, and an `uvx ruff@0.16.1 check .` planted three
-lines into a block passed it. The same anchor also missed the ordinary `- run: cmd` one-liner entirely,
+`['uv sync --locked', 'scripts/check.sh --floor', '|', '>-']`, and a pinned `uvx ruff@<version> check .` (0.16.1 at the time)
+planted three lines into a block passed it — spelled with a placeholder here because `_documented_pins` reads
+every `uvx ruff@` in this file as a live pin, history included. The same anchor also missed the ordinary `- run: cmd` one-liner entirely,
 returning `[]` — loudly, since the two `in commands` assertions fire before the scan loop, but it is why the
 two `run:` steps keep a `name:` that merely restates the command. `_ci_commands` follows a `|` or `>` into
 every line indented past the `run:` key. Same family as the `ast` lesson below: a guard anchored on how

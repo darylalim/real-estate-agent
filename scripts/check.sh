@@ -12,8 +12,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-RUFF_VERSION=0.16.1
-TY_VERSION=0.0.65
+RUFF_VERSION=0.17.2
+TY_VERSION=0.0.91
 
 floor=0
 [ "${1:-}" = "--floor" ] && floor=1

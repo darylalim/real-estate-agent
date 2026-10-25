@@ -2043,7 +2043,7 @@ def test_ci_calls_the_check_script_rather_than_restating_it() -> None:
     The workflow's whole argument is that `scripts/check.sh` decides what "done"
     means, so `test_check_script_pins_match_the_docs` guards one file instead of
     several. Inlining `uvx ruff check .` and `uv run pytest` as YAML steps while
-    debugging a red build is the obvious shortcut, and it drops both @0.16.1 and
+    debugging a red build is the obvious shortcut, and it drops both @0.17.2 and
     --floor with every other test still green.
 
     Checks only `run:` lines, because the rationale for calling the script is
@@ -2190,7 +2190,7 @@ def test_run_config_reaches_every_run_in_a_trace() -> None:
         def _persist_run(self, run: Run) -> None:
             self.runs.append(run)
 
-    # A dataclass rather than a TypedDict: ty 0.0.65 does not accept a local
+    # A dataclass rather than a TypedDict: ty 0.0.65 and 0.0.91 do not accept a local
     # TypedDict for langgraph's `StateLike` bound. pydantic's BaseModel also
     # type-checks, but only arrives here transitively.
     @dataclass
@@ -2382,7 +2382,7 @@ def test_documented_file_counts_match_the_tree() -> None:
 
     assert re.search(rf"\b{len(python_files)} Python files\b", text), (
         f"CLAUDE.md does not say {len(python_files)} Python files, which is what the tree holds. "
-        "Re-run `uvx ruff@0.16.1 format --check .` and update both numbers in that paragraph."
+        "Re-run `uvx ruff@0.17.2 format --check .` and update both numbers in that paragraph."
     )
     total = len(python_files) + len(markdown_files)
     assert re.search(rf"\ba total of {total}\b", text), (

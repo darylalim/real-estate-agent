@@ -240,8 +240,8 @@ Or individually:
 
 ```bash
 uv run pytest tests/ -q       # 94 tests, ~1.5s
-uvx ty@0.0.65 check           # type check
-uvx ruff@0.16.1 check .       # lint
+uvx ty@0.0.91 check           # type check
+uvx ruff@0.17.2 check .       # lint
 ```
 
 Development is pinned to Python 3.14, so the `requires-python = ">=3.11"` floor
