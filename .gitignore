@@ -15,3 +15,19 @@ __pycache__/
 # durable conversation state — deleting it discards every thread `--thread`
 # could resume.
 workspace/
+
+# SQLite databases and their WAL sidecars outside workspace/ — a stray backup
+# of checkpoints.db holds every thread's full transcript.
+*.db
+*.db-wal
+*.db-shm
+
+# Claude Code's per-user permission approvals. Ignored on the author's machine
+# only through a global git ignore, which a clone does not inherit.
+.claude/settings.local.json
+
+# Build output from `uv build`.
+dist/
+
+# macOS Finder metadata.
+.DS_Store
