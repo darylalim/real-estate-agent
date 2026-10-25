@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Actions are pinned by commit sha, not by tag: a tag is mutable and these
       # run with a token in scope. Bump both halves together.
@@ -33,8 +33,14 @@ jobs:
       # what stops `uvx ruff`, `uvx ty` and that rebuilt 3.11 environment
       # re-downloading on every run.
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        # uv is pinned here as ruff and ty are in check.sh: unpinned, a newer uv
+        # could change the lock format and fail `uv sync --locked` with no change
+        # in the repo. Keep it on the uv that wrote uv.lock, and bump it
+        # deliberately. v10.3.1 is the first setup-uv that carries 0.13.4's
+        # checksum, so the download is verified rather than merely fetched.
         with:
+          version: "0.13.4"
           enable-cache: true
 
       # --locked fails rather than quietly re-resolving, which makes this the
@@ -89,7 +95,7 @@ jobs:
       # The default depth-1 checkout has neither. 39 commits, so the cost is
       # noise; revisit if this repo ever gets long enough for it not to be.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
