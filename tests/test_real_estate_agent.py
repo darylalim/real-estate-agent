@@ -336,6 +336,67 @@ def test_document_extraction_reads_a_real_file(tmp_path, monkeypatch) -> None:
     assert "2,400" in payload["text"]
 
 
+def _minimal_pdf(pages: list[str]) -> bytes:
+    """A valid PDF with one Helvetica text line per page, written by hand.
+
+    By hand rather than with pypdf's writer, which has no public way to add a
+    content stream: what the agent depends on is the *reader*, and a test that
+    leaned on `PdfWriter._add_object` would break on a pypdf bump for reasons
+    unrelated to extraction.
+    """
+    count = len(pages)
+    kids = " ".join(f"{3 + 2 * i} 0 R" for i in range(count))
+    font = 3 + 2 * count
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{kids}] /Count {count} >>".encode(),
+    ]
+    for index, text in enumerate(pages):
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Resources << /Font << /F1 {font} 0 R >> >> /Contents {4 + 2 * index} 0 R >>".encode()
+        )
+        objects.append(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream))
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)
+
+
+def test_document_extraction_reads_a_pdf_page_by_page(tmp_path, monkeypatch) -> None:
+    """The only offline check that pypdf still extracts what the reviewer cites.
+
+    The eval fixtures are all `.txt`, so a pypdf upgrade that broke extraction
+    -- or renumbered pages, which every page citation in a review depends on
+    -- would otherwise surface only in a live run against a real client file.
+    """
+    monkeypatch.setattr(documents, "DOCUMENTS_DIR", tmp_path)
+    (tmp_path / "contract.pdf").write_bytes(
+        _minimal_pdf(["Earnest money is non-refundable.", "Possession 45 days after closing."])
+    )
+    tools = {tool.name: tool for tool in documents.make_document_tools()}
+
+    payload = json.loads(tools["extract_document_text"].invoke({"filename": "contract.pdf"}))
+    assert (payload["format"], payload["total_pages"], payload["truncated"]) == ("pdf", 2, False)
+    assert [page["page"] for page in payload["pages"]] == [1, 2]
+    assert "non-refundable" in payload["pages"][0]["text"]
+    assert "45 days after closing" in payload["pages"][1]["text"]
+
+    capped = json.loads(
+        tools["extract_document_text"].invoke({"filename": "contract.pdf", "max_pages": 1})
+    )
+    assert (capped["pages_extracted"], capped["truncated"]) == (1, True)
+
+
 def test_search_is_case_insensitive(provider: MockListingsProvider) -> None:
     """Regression: "Active" returned zero, which reads as an empty market."""
     assert len(provider.search(city="Honolulu", status="Active")) == len(
