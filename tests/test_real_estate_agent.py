@@ -649,6 +649,16 @@ def _rules() -> list[FilesystemPermission]:
         ("read", "/workspace/checkpoints.db", "deny"),
         ("write", "/workspace/checkpoints.db-wal", "deny"),
         ("write", "/workspace/checkpoints.db-shm", "deny"),
+        # Any SQLite file under /workspace/, not just that one name: a copy of
+        # the store holds the same transcripts. Measured 2026-10-25 -- the
+        # dependency-upgrade backup at workspace/backup-2026-10-25/ was read
+        # *and* write allowed under the name-only rule.
+        ("read", "/workspace/backup-2026-10-25/checkpoints.db", "deny"),
+        ("write", "/workspace/backup-2026-10-25/checkpoints.db", "deny"),
+        ("read", "/workspace/a/b/other.db-journal", "deny"),
+        # Exact suffixes, so ordinary files that merely contain ".db" stay usable.
+        ("write", "/workspace/notes.db.md", "allow"),
+        ("read", "/workspace/drafts/dbs-to-check.md", "allow"),
     ],
 )
 def test_permission_matrix(operation: str, path: str, expected: str) -> None:

@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 114 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 119 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -647,12 +647,18 @@ being written.
   has to run *before* it, since `from_conn_string` will not create the parent directory.
   `test_cli_builds_with_a_durable_checkpointer` pins it, because the thread tests pass their own saver and so
   stay green if `main.py` reverts to the default.
-- **`CHECKPOINT_DB` is denied in `WORKSPACE_PERMISSIONS`, and the deny must stay first.** It lives under
-  `workspace/` because that is gitignored — but gitignored is not out of reach, and `/workspace/**` is the one
-  subtree the agent can *write*. Without a deny ahead of that allow the model can truncate its own history
-  mid-session, and `read_file` on the db returns every other thread's transcript. The pattern is
-  `/workspace/checkpoints.db*` so SQLite's `-wal` and `-shm` sidecars are covered too. This was a real defect,
-  shipped and caught in review: the placement was reasoned about against git and not against the rule list.
+- **Every SQLite file under `/workspace/` is denied in `WORKSPACE_PERMISSIONS`, and the deny must stay
+  first.** `CHECKPOINT_DB` lives under `workspace/` because that is gitignored — but gitignored is not out of
+  reach, and `/workspace/**` is the one subtree the agent can *write*. Without a deny ahead of that allow the
+  model can truncate its own history mid-session, and `read_file` on the db returns every other thread's
+  transcript. This was a real defect, shipped and caught in review: the placement was reasoned about against
+  git and not against the rule list. **The same mistake happened again** on 2026-10-25: the rule named
+  `/workspace/checkpoints.db*`, so the dependency-upgrade backup at `workspace/backup-2026-10-25/` — the same
+  transcripts under another path — was read *and* write allowed. The patterns are now `/workspace/**/*.db`
+  plus `-wal`, `-shm` and `-journal` (`**` matches no directory too, so the store itself is covered), as
+  exact suffixes so a file like `notes.db.md` stays usable. A deny on a file's *name* does not follow its
+  *contents*; write it over the kind of file. Never put a copy of the store anywhere under `workspace/`
+  regardless — outside the project is the only place the agent cannot reach.
 - **The approval gate must not fail open across processes.** A durable checkpointer lets an interrupt outlive
   the run that raised it, but `interrupt_on` is only wired when `--require-approval` is passed — so resuming
   such a thread without the flag would hand the graph a pending `save_draft` with no middleware left to stop

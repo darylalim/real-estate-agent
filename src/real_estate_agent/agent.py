@@ -81,10 +81,22 @@ WORKSPACE_PERMISSIONS: list[FilesystemPermission] = [
     # one subtree the agent can write -- so without this the model can truncate
     # its own conversation history mid-session, and `read_file` on it returns
     # every *other* thread's full transcript. Same reasoning as the .env deny:
-    # gitignored is not the same as out of reach. The `*` covers SQLite's -wal
-    # and -shm sidecars, which are just as damaging to clobber.
+    # gitignored is not the same as out of reach. Any SQLite file anywhere
+    # under /workspace/, not only that name: a copy of the store holds the same
+    # transcripts, and the 2026-10-25 upgrade backup in workspace/backup-*/ was
+    # readable and writable under the name-only rule. `**` also matches no
+    # directory, so this covers the store itself. Exact suffixes -- the db and
+    # SQLite's -wal, -shm and -journal sidecars, as damaging to clobber -- so a
+    # file like notes.db.md stays usable.
     FilesystemPermission(
-        operations=["read", "write"], paths=["/workspace/checkpoints.db*"], mode="deny"
+        operations=["read", "write"],
+        paths=[
+            "/workspace/**/*.db",
+            "/workspace/**/*.db-wal",
+            "/workspace/**/*.db-shm",
+            "/workspace/**/*.db-journal",
+        ],
+        mode="deny",
     ),
     FilesystemPermission(operations=["read", "write"], paths=["/workspace/**"], mode="allow"),
     FilesystemPermission(operations=["read"], paths=["/skills/**"], mode="allow"),
