@@ -195,6 +195,15 @@ declares it explicitly in `subagents.py`.
   resolved and confined to the documents directory before any read.
 - **No shell.** The `execute` tool appears in the tool list but errors out — it
   requires a sandbox backend, and `FilesystemBackend` is not one.
+- **Safety-classifier refusals.** Opus 5.5 and Sonnet 5.5 can decline a
+  request with `stop_reason: "refusal"` and empty content. Every role on a
+  model that supports it sends `fallbacks: "default"`, so the API re-runs a
+  declined request on the model it recommends for that refusal category
+  (Sonnet 5.5 retries only `cyber` and `frontier_llm`; Haiku 5.5 has no
+  fallback and sends none). A refusal nothing recovers is replaced with a short
+  notice naming the category, so it shows in the CLI and the chat page, and a
+  declined specialist tells the orchestrator so rather than returning nothing.
+  Verified offline only — no live refusal has been provoked.
 - **Fair housing.** The `client-comms` skill carries explicit
   prohibited-language rules for listing copy, and `cma-analysis` forbids
   demographic adjustments.
@@ -256,7 +265,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 134 tests, ~1.5s
+uv run pytest tests/ -q       # 138 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```

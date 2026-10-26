@@ -1074,6 +1074,12 @@ def test_resuming_a_pending_approval_without_the_flag_refuses() -> None:
 # --- agent wiring ---------------------------------------------------------
 
 
+def _spec(model: object) -> str:
+    """A role's model as a ``provider:model`` string, whether it is still one or
+    has become a ``ChatAnthropic`` carrying an effort or a fallback."""
+    return model if isinstance(model, str) else f"anthropic:{cast(Any, model).model}"
+
+
 def _tool_names(agent) -> set[str]:
     """Every tool name reachable from a compiled graph's tool node.
 
@@ -1325,7 +1331,7 @@ def test_an_explicit_subagent_model_beats_a_per_role_variable(monkeypatch) -> No
         {role: "anthropic:claude-opus-5-5" for role in agent.SUBAGENT_ROLES}
         | {"property-search": "anthropic:claude-haiku-5-5"},
     )
-    seen: list[dict[str, str] | None] = []
+    seen: list[dict[str, Any] | None] = []
     real_build_subagents = agent.build_subagents
 
     def spy(**kwargs: Any) -> Any:
@@ -1337,8 +1343,11 @@ def test_an_explicit_subagent_model_beats_a_per_role_variable(monkeypatch) -> No
     agent.build_agent(subagent_model="anthropic:claude-sonnet-5-5")
     agent.build_agent()
     explicit, from_env = seen
-    assert explicit == dict.fromkeys(agent.SUBAGENT_ROLES, "anthropic:claude-sonnet-5-5")
-    assert from_env is not None and from_env["property-search"] == "anthropic:claude-haiku-5-5"
+    assert explicit is not None
+    assert {role: _spec(m) for role, m in explicit.items()} == dict.fromkeys(
+        agent.SUBAGENT_ROLES, "anthropic:claude-sonnet-5-5"
+    )
+    assert from_env is not None and _spec(from_env["property-search"]) == "anthropic:claude-haiku-5-5"
 
 
 # --- effort ---------------------------------------------------------------
@@ -1390,8 +1399,9 @@ def test_an_effort_changes_the_effort_and_nothing_else() -> None:
         assert sent["thinking"] == {"type": "adaptive"}
     assert "thinking" not in payload("anthropic:claude-haiku-5-5", "low")
 
-    # No effort leaves the plain string, so the default path is unchanged.
-    assert chat_model("anthropic:claude-opus-5-5", None) == "anthropic:claude-opus-5-5"
+    # No effort and no server-side fallback (Haiku 5.5 has none) leaves the
+    # plain string, so that path is unchanged.
+    assert chat_model("anthropic:claude-haiku-5-5", None) == "anthropic:claude-haiku-5-5"
     sentinel = object()
     assert chat_model(cast(Any, sentinel), "low") is sentinel
 
@@ -1433,8 +1443,136 @@ def test_an_explicit_subagent_effort_beats_a_per_role_variable(monkeypatch) -> N
         agent.SUBAGENT_ROLES, "low"
     )
     assert from_env["market-analyst"].reasoning_effort == "max"
-    # Unset roles keep the plain string: no effort sent, the API default applies.
-    assert isinstance(from_env["property-search"], str)
+    # Unset roles send no effort, so the API default applies. (They are model
+    # instances anyway on a model with server-side fallback.)
+    assert getattr(from_env["property-search"], "reasoning_effort", None) is None
+
+
+# --- refusals --------------------------------------------------------------
+
+
+def test_server_fallback_reaches_the_request_only_where_it_does_something() -> None:
+    """Built offline from the request payload; nothing is sent.
+
+    langchain-anthropic has no `fallbacks` field, so the parameter rides in
+    `model_kwargs` and the beta header routes the call through
+    `client.beta.messages`. Haiku 5.5 has no server-side fallback and a
+    fallback list there is a 400, so it must stay a plain string; so must any
+    non-Anthropic spec. An effort must not knock the fallback off.
+    """
+    from langchain_core.messages import HumanMessage
+
+    from real_estate_agent.agent import chat_model
+    from real_estate_agent.refusals import FALLBACK_BETA
+
+    for spec, effort in [
+        ("anthropic:claude-opus-5-5", None),
+        ("anthropic:claude-sonnet-5-5", None),
+        ("anthropic:claude-opus-5-5", "low"),
+    ]:
+        model = chat_model(spec, effort)
+        assert not isinstance(model, str), spec
+        sent = cast(Any, model)._get_request_payload([HumanMessage("hi")])
+        assert sent["fallbacks"] == "default", spec
+        assert sent["betas"] == [FALLBACK_BETA], spec
+    assert chat_model("anthropic:claude-haiku-5-5", None) == "anthropic:claude-haiku-5-5"
+    assert chat_model("openai:gpt-5", None) == "openai:gpt-5"
+
+
+def test_a_fallback_block_is_never_echoed_back_to_the_api() -> None:
+    """langchain stores a `fallback` block via `model_dump()`, which writes the
+    field name `from_` instead of the wire alias `from`, and replays it verbatim
+    -- so without the strip, the turn after any fallback is a malformed request.
+    The block is an audit marker the API lets callers drop; the text around it
+    must survive."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from real_estate_agent.agent import chat_model
+
+    model = chat_model("anthropic:claude-opus-5-5", None)
+    fallback = {
+        "type": "fallback",
+        "from_": {"model": "claude-opus-5-5"},
+        "to": {"model": "claude-opus-4-8"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+    }
+    history = [HumanMessage("hi"), AIMessage([fallback, {"type": "text", "text": "OK"}]), HumanMessage("again")]
+    sent = cast(Any, model)._get_request_payload(history)
+    assert sent["messages"][1]["content"] == [{"type": "text", "text": "OK"}]
+
+
+def test_server_fallback_does_not_change_the_tool_list(monkeypatch) -> None:
+    """Fallback turns the shipped roles' `provider:model` strings into model
+    instances, and deepagents resolves its harness profile from the model -- a
+    different profile for the instance would add or drop tools, `write_todos`
+    among them, with nothing failing."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
+    from real_estate_agent import agent
+
+    with_fallback = _tool_names(agent.build_agent())
+    monkeypatch.setattr(agent, "wants_server_fallback", lambda spec: False)
+    assert _tool_names(agent.build_agent()) == with_fallback
+    assert "write_todos" in with_fallback
+
+
+def test_a_refusal_reaches_the_orchestrator_and_the_reader_as_a_notice() -> None:
+    """Drives the real graph with a scripted model, so no network and no key.
+
+    A specialist that refuses returns empty content, and the `task` tool hands
+    the orchestrator its last message -- so without the middleware the
+    orchestrator gets an empty string and carries on as if the step ran. The
+    refused reply here also carries a tool call, which must not run: a refusal
+    mid-output can leave one behind. The orchestrator's own refusal is the
+    reply the CLI and the chat page print, so it must carry the notice too.
+    """
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from real_estate_agent.agent import build_agent
+    from real_estate_agent.refusals import REFUSAL_NOTICE
+
+    class Scripted(GenericFakeChatModel):
+        """Replays its messages in order, whoever asks; tools are ignored."""
+
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+            return self
+
+    def refused(category: str | None, **tool_args: Any) -> AIMessage:
+        calls = [{"name": "search_listings", "args": tool_args, "id": "call-left-behind"}]
+        return AIMessage(
+            "",
+            tool_calls=calls if tool_args else [],
+            response_metadata={"stop_reason": "refusal", "stop_details": {"category": category}},
+        )
+
+    model = Scripted(
+        messages=iter(
+            [
+                AIMessage(
+                    "",
+                    tool_calls=[
+                        {
+                            "name": "task",
+                            "args": {"description": "value it", "subagent_type": "market-analyst"},
+                            "id": "call-task",
+                        }
+                    ],
+                ),
+                refused("cyber", city="Hilo"),
+                refused(None),
+            ]
+        )
+    )
+    agent = build_agent(model=cast(Any, model), subagent_model=cast(Any, model))
+    state = agent.invoke(
+        {"messages": [{"role": "user", "content": "Value MLS-1022"}]},
+        {"configurable": {"thread_id": "refusal-under-test"}},
+    )
+
+    tool_results = [m for m in state["messages"] if isinstance(m, ToolMessage)]
+    assert [m.content for m in tool_results] == [REFUSAL_NOTICE.format(category="cyber")]
+    assert state["messages"][-1].content == REFUSAL_NOTICE.format(category="not given")
+    assert state["messages"][-1].tool_calls == []
 
 
 def test_the_judge_sends_no_sampling_parameters(monkeypatch) -> None:
