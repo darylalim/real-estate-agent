@@ -18,6 +18,10 @@ from ui.market_data import (
     market_snapshot,
 )
 
+# Wide, for the metric row and the two chart panels side by side. Set here
+# rather than inherited, for the reason chat.py gives.
+st.set_page_config(layout="wide")
+
 _STATUS_CHOICES = {"Active": "active", "Sold": "sold", "Pending": "pending", "All": None}
 
 # Width of one bar in the price histogram. Native charts want pre-binned data;
@@ -153,6 +157,20 @@ property_type = None if property_type_label == "All" else property_type_label
 status = _STATUS_CHOICES.get(status_label or "Active")
 state = states.get(city)
 
+# The filters, stated in the page. On a phone the sidebar starts collapsed, and
+# nothing else in the main column names which market, type or status every
+# number below belongs to. The sidebar's own words, except that a bare "All"
+# needs its noun to mean anything out of context.
+st.caption(
+    " · ".join(
+        [
+            f"{city}, {state}" if state else city,
+            "All property types" if property_type_label == "All" else property_type_label,
+            "All statuses" if status_label == "All" else (status_label or "Active"),
+        ]
+    )
+)
+
 snapshot = market_snapshot(city, state, property_type, months_back)
 active = snapshot["active_inventory"]
 closed = snapshot["closed_sales"]
@@ -241,6 +259,9 @@ if frame.empty:
     )
     st.stop()
 
+# Streamlit stacks columns at 640px and offers no other breakpoint without CSS.
+# Between 640px and ~1000px with the sidebar open each chart is narrow but
+# readable at height=280, so this is left as it is on purpose.
 left, right = st.columns(2)
 
 with left, st.container(border=True):
@@ -294,6 +315,9 @@ with st.container(border=True):
         longitude="longitude",
         color="_dot",
         size=40,
+        # Not the 500px default: on a phone that is most of the screen, and a
+        # touch drag on a map pans it instead of scrolling the page.
+        height=400,
     )
     # `st.map` draws no legend of its own, and this one names only the statuses
     # actually drawn — static, it advertised "Teal: pending" under a Sold-only

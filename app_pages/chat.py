@@ -39,6 +39,11 @@ from ui.agent_session import (
 )
 from ui.elements import lazy_expander, stable_key
 
+# Centred, so a reply reads at a normal line length on a wide monitor. First, and
+# explicit, because `set_page_config` is additive: left unset, the width is
+# whatever the last page set.
+st.set_page_config(layout="centered")
+
 SUGGESTIONS = {
     "Find homes": "Find 3-bed homes in Hilo under $600k and build me a shortlist.",
     "Value a property": "What is MLS-1016 worth? Run a CMA and write it to the workspace.",
@@ -136,7 +141,7 @@ def _workspace_browser() -> None:
             # stops mid-line. `render_message` marks its cut for this reason.
             body += "\n\n… truncated — read the whole file from the path above."
         with preview:
-            st.code(body, language="markdown")
+            st.code(body, language="markdown", wrap_lines=True)
 
 
 st.title("Chat")

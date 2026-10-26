@@ -19,10 +19,12 @@ from dotenv import load_dotenv
 # no special ordering to get it right; it just must not grow one.
 load_dotenv()
 
+# No `layout` here: each page sets its own as its first call. The calls are
+# additive, so a width set here would carry into whichever page did not
+# override it, and the chat page would come up wide after the market page.
 st.set_page_config(
     page_title="Real estate agent",
     page_icon=":material/home_work:",
-    layout="wide",
 )
 
 page = st.navigation(

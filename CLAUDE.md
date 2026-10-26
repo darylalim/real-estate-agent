@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 120 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 124 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -403,6 +403,15 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
 - **No Altair.** Its fluent builder (`alt.Chart(...).mark_bar().encode(...)`) is opaque to ty, which reports
   `unresolved-attribute` on `.encode` — and `error-on-warning = true` makes that a failure. `market.py`
   pre-bins prices in plain Python and uses `st.bar_chart`. Reach for a native chart before an ignore comment.
+- **Each page sets its own `layout`, as its first `st` call; the entry point sets none.** `set_page_config`
+  is additive — each call overrides only what it names — so a page that names no width inherits the last
+  one set, and the chat page came up wide after a visit to the market page. Nothing reads the viewport
+  from Python and the app uses no CSS, so "adapts to screen size" means choosing elements that wrap or
+  stack by themselves; the 640px column breakpoint is the only one there is.
+  `test_each_page_sets_its_own_layout_before_anything_else` reads the tree for it. The one `AppTest` in
+  the suite loads `app_pages/market.py` directly, against the bundled reference's advice to start from the
+  entry point: that advice concerns relative page paths, which the page has none of, and the entry point
+  calls `load_dotenv()` in the test process and opens the chat page on the real checkpoint store.
 - **One provider, in `ui/provider.py`, for both pages.** `get_agent` passes it explicitly rather than letting
   `build_agent` fall back to its own `MockListingsProvider`. Two instances of the deterministic mock are
   indistinguishable — which is why the split survived review — but a real feed would put the analyst and the

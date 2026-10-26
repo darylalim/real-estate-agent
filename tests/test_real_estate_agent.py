@@ -2535,6 +2535,127 @@ def test_both_theme_modes_meet_the_same_contrast_rules() -> None:
     assert not failures, "contrast below target:\n" + "\n".join(failures)
 
 
+def _page_tree(name: str) -> ast.Module:
+    return ast.parse((PROJECT_ROOT / "app_pages" / name).read_text(encoding="utf-8"))
+
+
+def _st_calls(node: ast.AST, command: str | None = None) -> list[ast.Call]:
+    """Every `st.<command>(...)` under `node`, in source order."""
+    calls = [
+        call
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "st"
+        and (command is None or call.func.attr == command)
+    ]
+    return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
+
+
+def _keyword(call: ast.Call, name: str) -> Any:
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return ast.literal_eval(keyword.value)
+    return None
+
+
+@pytest.mark.parametrize(("page", "layout"), [("chat.py", "centered"), ("market.py", "wide")])
+def test_each_page_sets_its_own_layout_before_anything_else(page: str, layout: str) -> None:
+    """Each page names its width itself, as the first `st` call it makes at run time.
+
+    The entry point used to set `layout="wide"` for both, which gave the chat page
+    lines of ~200 characters on a large monitor. `set_page_config` is additive —
+    each call overrides only what it names — so a page that names nothing inherits
+    whatever the *previous* page or the entry point last set, and the chat page
+    would come up wide after a visit to the market page. Hence both pages set it,
+    explicitly, before any element.
+
+    "First call at run time" is not "first statement": `chat.py` opens with
+    constants and a fragment whose body is defined, not run, at the top. So
+    function bodies are skipped and only module-level statements count.
+    """
+    calls = [
+        call
+        for statement in _page_tree(page).body
+        if not isinstance(statement, ast.FunctionDef)
+        for call in _st_calls(statement)
+    ]
+    assert calls, f"{page} makes no module-level st call"
+    first = calls[0]
+    assert isinstance(first.func, ast.Attribute)
+    assert first.func.attr == "set_page_config", (
+        f"{page}'s first st call is st.{first.func.attr} (line {first.lineno}), not st.set_page_config"
+    )
+    assert _keyword(first, "layout") == layout, f"{page} must set layout={layout!r} explicitly"
+
+
+def test_the_map_and_the_sidebar_preview_fit_a_phone() -> None:
+    """Two sizes that only matter on a small screen, so nothing else would notice them.
+
+    `st.map` defaults to 500px. On a phone that is most of the viewport, and a
+    touch drag on a map pans it rather than scrolling the page, so the reader gets
+    stuck. The sidebar's file preview had no `wrap_lines`, so every CMA line
+    scrolled sideways in a column a few hundred pixels wide; the page's other two
+    `st.code` calls already wrap.
+    """
+    (map_call,) = _st_calls(_page_tree("market.py"), "map")
+    assert _keyword(map_call, "height") == 400
+
+    previews = [
+        call for call in _st_calls(_page_tree("chat.py"), "code") if _keyword(call, "language") == "markdown"
+    ]
+    assert len(previews) == 1, "expected exactly one markdown preview in chat.py"
+    assert _keyword(previews[0], "wrap_lines") is True
+
+
+def test_the_market_page_names_its_filters_above_the_numbers() -> None:
+    """On a phone the sidebar starts collapsed, so the filters must be stated in the page.
+
+    Without this, every number on the page belongs to a market, a property type
+    and a status that nothing on screen names. The caption sits above the first
+    metric, and it follows the sidebar: driving the City selectbox to another
+    market must change it.
+
+    Loaded with `from_file` on the page itself, against the bundled testing
+    reference's advice to start from the entry point. That advice is about how
+    relative page paths resolve, and this page uses none. The entry point would
+    cost more than it buys: it calls `load_dotenv()`, which in this process would
+    apply a developer's `.env` to every test that runs after this one, and it
+    opens the chat page first, which builds a graph on the real checkpoint store.
+    """
+    from streamlit.testing.v1 import AppTest
+
+    def document_order(node: Any) -> list[Any]:
+        found = []
+        for child in getattr(node, "children", {}).values():
+            found.append(child)
+            found.extend(document_order(child))
+        return found
+
+    def summary_and_first_metric(at: AppTest) -> tuple[str, int, int]:
+        elements = document_order(at.main)
+        first_metric = next(i for i, element in enumerate(elements) if element.type == "metric")
+        city = at.selectbox(key="market_city").value
+        for i, element in enumerate(elements):
+            if element.type == "caption" and element.value.startswith(f"{city},"):
+                return element.value, i, first_metric
+        raise AssertionError(f"no caption names the selected market {city!r}")
+
+    at = AppTest.from_file(str(PROJECT_ROOT / "app_pages" / "market.py"), default_timeout=30).run()
+    assert not at.exception, at.exception
+
+    summary, position, first_metric = summary_and_first_metric(at)
+    assert position < first_metric, "the filter summary must come before the numbers it qualifies"
+    assert "Active" in summary
+
+    cities = at.selectbox(key="market_city").options
+    assert len(cities) > 1, "need a second market to show the caption follows the sidebar"
+    at.selectbox(key="market_city").set_value(cities[1]).run()
+    moved, _, _ = summary_and_first_metric(at)
+    assert moved != summary and moved.startswith(f"{cities[1]},")
+
+
 # --- toolchain configuration ----------------------------------------------
 #
 # "N tests, ty clean, ruff clean" is only a gate if "clean" cannot quietly
