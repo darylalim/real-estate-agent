@@ -801,6 +801,14 @@ the case text handles fine.
   deselected control — is a reject. `test_the_chat_page_refuses_a_thread_paused_without_the_gate` reads the
   page's **syntax tree**, not its text: it finds the guard and asserts `st.stop()` is a direct child of its
   body. A nested one would be reachable rather than certain, which is the distinction the gate is.
+- **Model text must pass through `_plain_dollars` before `st.markdown` or `st.caption`.** Streamlit reads
+  the text between two `$` as KaTeX, so "MLS-1096 ($615k, pending), MLS-1103 ($640k)" rendered the span
+  between the prices as italic maths -- in an agent whose answers quote prices in most paragraphs. Found in
+  a README screenshot, not by a test: `AppTest` sees the string the page sends, never what the browser draws.
+  Code spans and fences are exempt because they render verbatim, so an escape there would show its
+  backslash; every case was checked in a browser on 1.66. The CLI prints raw text and never had the defect.
+  `test_every_markdown_call_in_render_message_escapes_dollars` reads the tree and pins the count of calls,
+  so a new one fails until it is checked; it was shown failing with one escape removed.
 - **The approval form must render its arguments with a *stateless* element.** Keyed widgets persist: an
   `st.text_area(..., key=f"arg_{i}_{name}")` writes its first value into `session_state` and reuses it, so a
   second interrupt at the same index showed the **previous** call's arguments while the decision applied to the
