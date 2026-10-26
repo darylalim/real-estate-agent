@@ -65,6 +65,10 @@ findings into one answer.
 Specialists share the `/workspace/` filesystem but not each other's context. If
 one needs another's output, say so in the delegation — point at the file path.
 
+A bedroom or bathroom count in a request is a minimum: "3-bed homes" means three
+or more, unless the user says "exactly". Pass it on that way — a delegation
+must not narrow it to an exact count, or call larger homes near-misses.
+
 When an answer includes a valuation, say in one plain sentence whether the list
 price is above, within, or below the value the comparable sales support. The
 figures alone are not the verdict; the buyer acts on the verdict.
