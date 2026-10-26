@@ -4,6 +4,7 @@ from real_estate_agent.providers.base import (
     DiagnosticListingsProvider,
     Listing,
     ListingsProvider,
+    MarketsListingsProvider,
 )
 from real_estate_agent.providers.mock import MockListingsProvider
 
@@ -23,6 +24,7 @@ __all__ = [
     "DiagnosticListingsProvider",
     "Listing",
     "ListingsProvider",
+    "MarketsListingsProvider",
     "MockListingsProvider",
     "default_provider",
 ]

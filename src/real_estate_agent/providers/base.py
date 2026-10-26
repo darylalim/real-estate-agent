@@ -135,3 +135,17 @@ class DiagnosticListingsProvider(ListingsProvider, Protocol):
     ) -> tuple[Listing | None, list[Listing], dict[str, int]]:
         """Return ``(subject, comps, rejection_counts_by_reason)``."""
         ...
+
+
+class MarketsListingsProvider(ListingsProvider, Protocol):
+    """Optional extension: list the markets without fetching their listings.
+
+    The dashboard builds its city and property-type filters from this when it
+    exists. Without it, those filters come from one capped ``search``, so a feed
+    holding more records than the cap drops cities from the filter with no sign
+    that anything is missing.
+    """
+
+    def markets(self) -> Sequence[tuple[str, str, Sequence[str]]]:
+        """Return ``(city, state, property_types)`` for every market held."""
+        ...

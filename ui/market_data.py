@@ -26,8 +26,10 @@ from real_estate_agent.tools import make_market_tools
 from ui.provider import get_provider
 
 # The mock holds ~100 listings; a real provider could hold far more. This is the
-# same ceiling `market_statistics` and `qualify_lead` use internally.
-_SEARCH_LIMIT = 500
+# same ceiling `market_statistics` and `qualify_lead` use internally. The page
+# reads it too: a frame of exactly this many rows may be a truncated one, and it
+# says so rather than presenting a capped view as the whole market.
+SEARCH_LIMIT = 500
 
 
 @st.cache_resource
@@ -75,7 +77,7 @@ def listings_frame(
         state=state,
         property_type=property_type,
         status=status,
-        limit=_SEARCH_LIMIT,
+        limit=SEARCH_LIMIT,
     )
     frame = pd.DataFrame([listing.as_dict() for listing in listings])
     if frame.empty:
@@ -104,8 +106,20 @@ def dataset_choices() -> tuple[list[str], list[str], dict[str, str]]:
     value this scan had already seen -- free against the in-memory mock, which
     is exactly why it survived, but two round-trips per city against a real
     feed and a second cache family to keep warm and invalidate.
+
+    A provider with ``markets()`` (``MarketsListingsProvider``) is asked for the
+    markets directly. The scan is the fallback, and it is capped at
+    ``SEARCH_LIMIT``: past that, cities would drop out of the filter silently.
     """
-    listings = get_provider().search(status=None, limit=_SEARCH_LIMIT)
+    provider = get_provider()
+    markets = getattr(provider, "markets", None)
+    if markets is not None:
+        found = list(markets())
+        cities = sorted({city for city, _state, _types in found})
+        property_types = sorted({t for _city, _state, types in found for t in types})
+        states = {city: state for city, state, _types in found}
+        return cities, property_types, states
+    listings = provider.search(status=None, limit=SEARCH_LIMIT)
     cities = sorted({listing.city for listing in listings})
     property_types = sorted({listing.property_type for listing in listings})
     states = {listing.city: listing.state for listing in listings}

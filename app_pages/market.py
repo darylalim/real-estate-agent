@@ -13,6 +13,7 @@ import streamlit as st
 
 from real_estate_agent.tools.market import BUYERS_MARKET_MONTHS, SELLERS_MARKET_MONTHS
 from ui.market_data import (
+    SEARCH_LIMIT,
     dataset_choices,
     listings_frame,
     market_snapshot,
@@ -258,6 +259,15 @@ if frame.empty:
         icon=":material/search_off:",
     )
     st.stop()
+
+# The statistics above come from `market_statistics`, which has its own cap; the
+# table, charts and map below are this one frame. At exactly the cap there may be
+# more listings than were fetched, and nothing else on screen would say so.
+if len(frame) >= SEARCH_LIMIT:
+    st.caption(
+        f"Showing the first {SEARCH_LIMIT:,} listings. The charts, map and table "
+        "below may not cover the whole market."
+    )
 
 # Streamlit stacks columns at 640px and offers no other breakpoint without CSS.
 # Between 640px and ~1000px with the sidebar open each chart is narrow but
