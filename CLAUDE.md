@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A real estate agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.7.32: an
 orchestrator that holds no domain tools and delegates to four specialists over a shared `/workspace/` filesystem.
 
-`README.md` is current and detailed — it covers the safety rationale, the live-run verification table, and the
-defect history. Read it before changing containment rules, the draft handoff, or the mock dataset. This file
+`README.md` is the short user-facing overview; `docs/design-notes.md` holds the safety rationale, the live-run
+verification table, and the defect history. Read the notes before changing containment rules, the draft handoff, or the mock dataset. This file
 covers what the README doesn't: commands, the wiring that spans several files, and the invariants that fail
 silently.
 
@@ -83,8 +83,8 @@ import succeeds whether or not the transitive path exists. A direct import gets 
 
 **`ruff check` yes, `ruff format` no.** The formatter would rewrite 17 of the 30 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
-reports a total of 35, not 30: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
-this file, and the three `SKILL.md` files are in its denominator. All 17 rewrites are `.py`; the count read 10 until M3 found it at 16 on an untouched `main`.) The two
+reports a total of 36, not 30: since 0.16 it also counts every Markdown file for its Python fences, so `README.md`,
+`docs/design-notes.md`, this file, and the three `SKILL.md` files are in its denominator. All 17 rewrites are `.py`; the count read 10 until M3 found it at 16 on an untouched `main`.) The two
 denominators read 14 and 19 when first written and drifted in silence as the repo grew, so
 `test_documented_file_counts_match_the_tree` now gates them — a caveat telling the next reader to re-derive
 was the same instruction that had already failed once. The rewrite count needs the formatter itself and
@@ -540,7 +540,7 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   tool-result panels (up to `_TOOL_RESULT_PREVIEW` chars of JSON *per tool call*, re-sent on every full
   rerun and growing with the thread) and the sidebar's file preview. The third, `Resume a thread`, is
   **deliberately not** — it wraps a form, and a lazily rendered form widget loses its state, which is the
-  dead-Load-button defect the README already lists.
+  dead-Load-button defect `docs/design-notes.md` already lists.
   - `on_change="rerun"` is what makes `.open` a boolean; under the default `"ignore"` it is `None`, so
     dropping the flag makes every guard false and results stop rendering *at all*. Still true on 1.62,
     1.64 and 1.66, measured directly: `.open` is `None` under the default and `False` under `on_change="rerun"`.
@@ -693,7 +693,7 @@ being written.
   the name removed one draw per listing and moved the status split from 35/27/4 to 26/29/11, which broke the
   price-asymmetry invariant and put 29 cross-ZIP comps where there had been one. Nothing raised. If you must
   change the draw count, re-derive in the same commit: the ≥60% comp share, the asymmetry thresholds in
-  `test_expensive_market_can_return_nothing`, and every dataset number written into `README.md`.
+  `test_expensive_market_can_return_nothing`, and every dataset number written into `README.md` and `docs/design-notes.md`.
 - **The fixture is sold-heavy on purpose, and that is what makes months-of-inventory readable.** MOI divides
   standing inventory by the monthly rate of a *year* of sales, so at a 12-month window it is
   `12 × active / sold` — a market at four months needs roughly three closed records per active one. No

@@ -2,66 +2,72 @@
 
 [![check](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml/badge.svg)](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml)
 
-Multi-agent real estate assistant built on LangChain
+A multi-agent real estate assistant built on LangChain
 [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) and
-Claude. Drafts only, never sends.
+Claude. It searches listings, runs comparative market analyses, reviews
+documents, and drafts client emails. **It drafts; it never sends.**
 
-An orchestrator that delegates to four specialists — property search, market
-analysis, document review, and client communication — each with its own tools,
-its own context window, and a shared `/workspace/` filesystem.
+The reasoning, measurements and defect history behind this README live in
+[`docs/design-notes.md`](docs/design-notes.md).
 
 ## Quick start
 
 ```bash
-cp .env.example .env          # add your ANTHROPIC_API_KEY
-uv sync                       # Python 3.14, pinned by .python-version
+cp .env.example .env    # add your ANTHROPIC_API_KEY
+uv sync                 # Python 3.14, pinned by .python-version
 uv run python main.py "Find 3-bed homes in Hilo under $600k"
 ```
 
-Interactive mode:
+| Command | Does |
+|---|---|
+| `uv run python main.py` | Interactive mode |
+| `uv run python main.py --thread <id>` | Continue a conversation; every run prints its thread id |
+| `uv run python main.py --require-approval` | Pause for approval before each `save_draft` |
+| `uv run streamlit run streamlit_app.py` | The same agent in a browser, plus a market dashboard |
 
-```bash
-uv run python main.py
-```
+Conversations are checkpointed to `workspace/checkpoints.db`, so a thread
+started in the CLI can be resumed in the browser, and vice versa.
 
-Conversations are checkpointed to `workspace/checkpoints.db`, so a thread can be
-picked up in a later run. Every invocation prints its thread id:
-
-```bash
-uv run python main.py --thread 8f2c1e04-...   # continue where you left off
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/cli-dark.png">
+  <img alt="A CLI run: the orchestrator delegates to property-search and returns six Hilo listings" src="docs/images/cli-light.png">
+</picture>
 
 ## Web UI
 
-```bash
-uv run streamlit run streamlit_app.py
-```
-
-Two pages over the same project:
-
-- **Chat** — the browser analogue of `main.py`. Drives the real orchestrator,
-  streams each delegation and tool result, and lists what the specialists wrote
-  to `/workspace/`. History comes from the checkpoint database rather than
-  browser state, so a thread id printed by the CLI can be pasted in and resumed
-  here, and vice versa. The approval gate is a sidebar toggle and fails closed
-  like the CLI's: a thread paused mid-`save_draft` refuses a new turn until the
-  toggle is back on. A **Models** selectbox beside it picks between the
-  configured build (`.env`, or the shipped Sonnet/Opus mix) and all-Opus 5.5 —
-  the two configurations the model comparison found worth running.
+- **Chat** — drives the real orchestrator, streams each delegation and tool
+  result, and lists the files the specialists wrote to `/workspace/`. The
+  sidebar holds the approval toggle and a **Models** picker (the configured
+  build, or all-Opus 5.5).
 - **Market** — supply, pricing and absorption over the listings provider. No
-  model runs, no API key. Its headline numbers come from the agent's own
-  `market_statistics` tool rather than a second implementation, so the dashboard
-  cannot disagree with what the analyst was told.
+  model and no API key. Its headline numbers come from the agent's own
+  `market_statistics` tool, so the dashboard cannot disagree with the analyst.
 
-Three things to know before editing either page:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/chat-run-dark.png">
+  <img alt="The chat page showing the same Hilo search, resumed from the CLI's thread" src="docs/images/chat-run-light.png">
+</picture>
 
-- **Theming is `.streamlit/config.toml`** — native config, no CSS. It defines
-  light *and* dark, so the settings-menu mode switch keeps working.
-- **The chat sidebar's workspace browser is an `st.fragment`**, so picking a
-  file does not re-read the checkpoint or re-render the conversation.
-- **Tool-result panels and the file preview render only when opened.** A
-  collapsed `st.expander` ships its body otherwise, so a long thread re-sent
-  every tool call's JSON every turn.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/market-dark.png">
+  <img alt="The market dashboard for Hilo: active listings, median price, months of inventory and charts" src="docs/images/market-light.png">
+</picture>
+
+<details>
+<summary>Chat sidebar before a conversation</summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/chat-idle-dark.png">
+  <img alt="The empty chat page with its sidebar: approval toggle, model picker, thread id and workspace browser" src="docs/images/chat-idle-light.png">
+</picture>
+
+</details>
+
+Bind to loopback when running locally, since the app spends your API key:
+
+```bash
+uv run streamlit run streamlit_app.py --server.address 127.0.0.1
+```
 
 ## Architecture
 
@@ -74,492 +80,136 @@ orchestrator  (write_todos + task)
 └── client-liaison     qualify_lead, save_draft               → skills/client-comms
 ```
 
-The orchestrator holds no domain tools. It plans with `write_todos`, delegates
-with `task`, and synthesises what comes back. Specialists share the filesystem
-but not each other's context, so a long document review can't crowd out the
-shortlist the buyer agent is maintaining.
-
-market-analyst is the only specialist with two tool groups (`subagents.py`
-passes it `market_tools + listing_tools`), so it can look up a subject property
-itself instead of round-tripping through the orchestrator for an id it was
-already given.
+- **The orchestrator holds no domain tools.** It plans with `write_todos`,
+  delegates with `task`, and combines what comes back.
+- **Specialists share a filesystem, not context.** A long document review cannot
+  crowd out the shortlist another specialist is maintaining.
+- **Skills are declared per specialist**, not inherited. The three with
+  methodology too large for a prompt (CMA grids, clause checklists, fair-housing
+  rules) load one; `property-search` fits in its prompt.
+- **Arithmetic happens in Python.** Medians, months of inventory and value
+  ranges are computed by the tools, not by the model.
 
 | Path | Purpose |
 |---|---|
 | `src/real_estate_agent/agent.py` | Orchestrator assembly, backend, permissions |
 | `src/real_estate_agent/subagents.py` | The four specialist definitions |
 | `src/real_estate_agent/tools/` | Tool groups, each bound to a data source |
-| `src/real_estate_agent/providers/` | `ListingsProvider` protocol + mock feed |
-| `skills/` | Progressive-disclosure methodology, loaded on demand |
+| `src/real_estate_agent/providers/` | `ListingsProvider` protocol and mock feed |
+| `skills/` | Methodology loaded on demand |
+| `streamlit_app.py`, `app_pages/`, `ui/` | Web UI |
+| `evals/` | LangSmith datasets and graders |
 | `workspace/` | Agent scratch space (gitignored) |
-| `streamlit_app.py`, `app_pages/`, `ui/` | The web UI — a consumer of the package, like `main.py` |
-| `.streamlit/config.toml` | Theme, in both light and dark |
 
-## Plugging in real listings data
+## Listings data
 
-**The default data source is a deterministic mock**, not a real feed. The agent
-runs end-to-end today, but every listing is synthetic.
+**The default data source is a deterministic mock.** Every listing is synthetic.
+It models two deliberately different Hawaii markets:
 
-`ListingsProvider` (`providers/base.py`) is the only thing the tools depend on.
-Implement `search`, `get`, and `comparables` against your feed, then return it
-from `default_provider()` in `providers/__init__.py`. That is the one edit: the
-CLI and both Streamlit pages all get their provider from it, and no tool,
-subagent, or prompt changes:
+| Market | Active price range | Median | $/sqft | Months of inventory |
+|---|---|---|---|---|
+| Honolulu (96815, 96816) | $566k–$1.69M | $1.04M | $761 | 2.8 (seller's) |
+| Hilo (96720) | $257k–$642k | $521k | $312 | 5.0 (balanced) |
+
+To use a real feed, implement `search`, `get` and `comparables` from
+`ListingsProvider` (`providers/base.py`) and return it from `default_provider()`
+in `providers/__init__.py`. That is the only edit: the CLI and both web pages
+read their provider from it, and no tool, specialist or prompt changes.
 
 ```python
 def default_provider() -> ListingsProvider:
     return MyMlsProvider(api_key=...)
 ```
 
-Library callers can still pass one directly with `build_agent(provider=...)`.
+Two optional methods are worth adding:
 
-Two optional methods are worth adding. `comparables_with_diagnostics`
-(`DiagnosticListingsProvider`) tells the analyst what comp screening threw away.
-`markets()` (`MarketsListingsProvider`) lets the dashboard list every city
-without fetching listings; without it the filters come from a scan capped at 500
-records. To check a new provider, add it to `PROVIDERS` in the tests: the
-contract section then holds it to every rule in `providers/base.py`.
+- `comparables_with_diagnostics` (`DiagnosticListingsProvider`) tells the
+  analyst what comp screening discarded.
+- `markets()` (`MarketsListingsProvider`) lets the dashboard list every city
+  without a search capped at 500 records.
 
-The mock models two deliberately different Hawaii markets (Honolulu 96815/96816
-at $566k–$1.69M active, median $1.04M and $761/sqft; Hilo 96720 at $257k–$642k,
-median $521k and $312/sqft) so budget-feasibility logic has something real to
-bite on. The two Honolulu ZIPs sit ~2.1 miles apart, so the default 1.5-mile
-comp radius mostly separates them — mostly, because the per-ZIP coordinate
-jitter lets a small tail of cross-ZIP pairs fall inside it. Hilo is on another
-island and cannot contaminate an Oahu comp set at any radius a CMA would use.
+To check a new provider, add it to `PROVIDERS` in the tests. The contract tests
+then hold it to every rule in `providers/base.py`.
 
-Everything that differs between ZIPs lives on one `_Market` record, because a
-single global value was wrong for at least one of the three:
+## Safety
 
-- **Property mix.** 96815 is Waikiki — a wall of condo towers with essentially
-  no detached housing — while 96720 is overwhelmingly single-family. A uniform
-  draw put 2,100-sqft single-family homes on Seaside Ave.
-- **Association fee.** Derived from size and market rather than drawn from a
-  flat menu. Uncorrelated, it put $165/mo on a $1.3M Waikiki condo and $1,150/mo
-  on a $380k Hilo one — and at Hawaii's fee levels that drives the affordability
-  answer rather than decorating it. It is capitalised at 100× the monthly figure
-  wherever a fee has to be compared against a price, in both the CMA adjustment
-  grid and `qualify_lead`, so one fee cannot be worth two amounts on one screen.
-
-Addresses are anchored on the street, not the ZIP: each street carries its own
-coordinates and real house-number range, so `238 Beach Walk` lands on Beach Walk
-rather than in the 3000s of a two-block street. It replaced a per-ZIP coordinate
-box, which cannot work here — Waikiki is a narrow strip along a **diagonal**
-shoreline, so every axis-aligned rectangle covering it also covers open water.
-Shrinking the box cut listings in the Pacific from six to none by the
-flat-latitude test used to check it, and left eleven when measured against the
-real coast: the shape was the defect, and a test whose boundary matches the fix
-can only confirm it.
-
-The dataset is deliberately sold-heavy — 76 closed against 22 active — because
-months-of-inventory divides standing inventory by the monthly rate of a *year*
-of sales, so a market at four months needs roughly three closed records per
-active one. The payoff: Honolulu lands at 2.8 months (seller's) and Hilo at 5.0
-(balanced), where the previous fixture reported a deep buyer's market for both
-and never exercised the other branches.
-
-Comps are screened on property type as well as size, and `screened_out` reports
-both. Without it the scorer — which weighs distance, size, beds and age, but
-never type — handed a Waikiki townhouse eight single-family comps while the CMA
-methodology required the same type, with nothing in the payload explaining the
-contradiction. Pass `same_property_type=False` to widen deliberately; that is a
-weaker comparison, not a neutral one.
-
-## Skills vs. prompts
-
-Three specialists load a skill; `property-search` does not. That is the
-criterion working as intended — CMA adjustment grids, contract clause
-checklists, and fair-housing rules for listing copy are too large to sit in a
-system prompt, while property-search's workflow fits in a paragraph.
-
-Skills are **not** inherited from the orchestrator. Each subagent that needs one
-declares it explicitly in `subagents.py`.
-
-## Safety and containment
-
-- **Write containment.** `FilesystemBackend` grants real disk access, so
-  `build_agent` passes explicit `FilesystemPermission` rules: writes are allowed
-  only under `/workspace/`, `.env` and `.git` are denied for read and write, and
-  everything else is read-only. Rules are evaluated **in order, first match
-  wins** — the allows must precede the catch-all deny.
-- **No send capability, by design.** The agent cannot send email. `save_draft`
-  writes three artifacts and stops: a `.md` (readable canonical copy), a `.eml`
-  carrying `X-Unsent: 1` so a mail client opens it as an editable draft, and a
-  `mailto:` URL in the return value for one-click compose (omitted above ~1800
-  chars, where clients truncate). A human still reads the text and presses
-  send — which keeps accountability with the licensed person, where
-  fair-housing and agency law put it. If you later add real delivery, gate it:
-  `build_agent(require_approval=True)` pauses `save_draft` for approval. The
-  CLI's checkpointer is durable, so a pending approval survives the process —
-  reject is not the same as walking away.
+- **No send capability.** `save_draft` writes a `.md`, an unsent `.eml`
+  (`X-Unsent: 1`), and returns a `mailto:` link. A licensed human reads it and
+  presses send.
+- **Approval gate.** `--require-approval` (or the sidebar toggle) pauses each
+  `save_draft`. It fails closed: no answer is a reject, and a paused thread
+  cannot be resumed without the gate.
+- **Write containment.** Writes are allowed only under `/workspace/`. `.env`,
+  `.git` and the checkpoint database are denied; everything else is read-only.
+  Rules are first-match-wins, so the allows must precede the catch-all deny.
 - **Path traversal.** Document filenames come from model output, so they are
-  resolved and confined to the documents directory before any read.
-- **No shell.** The `execute` tool appears in the tool list but errors out — it
-  requires a sandbox backend, and `FilesystemBackend` is not one.
-- **Safety-classifier refusals.** Opus 5.5 and Sonnet 5.5 can decline a
-  request with `stop_reason: "refusal"` and empty content. Every role on a
-  model that supports it sends `fallbacks: "default"`, so the API re-runs a
-  declined request on the model it recommends for that refusal category
-  (Sonnet 5.5 retries only `cyber` and `frontier_llm`; Haiku 5.5 has no
-  fallback and sends none). A refusal nothing recovers is replaced with a short
-  notice naming the category, so it shows in the CLI and the chat page, and a
-  declined specialist tells the orchestrator so rather than returning nothing.
-  Verified offline only — no live refusal has been provoked.
-- **Fair housing.** The `client-comms` skill carries explicit
-  prohibited-language rules for listing copy, and `cma-analysis` forbids
-  demographic adjustments.
+  confined to the documents directory before any read.
+- **No shell.** The `execute` tool is listed but errors, because
+  `FilesystemBackend` is not a sandbox.
+- **Refusals.** Models that support it send `fallbacks: "default"`, so the API
+  retries a declined request on a recommended model. A refusal nothing recovers
+  becomes a short notice rather than an empty reply. Verified offline only.
+- **Fair housing.** `client-comms` prohibits discriminatory listing language;
+  `cma-analysis` forbids demographic adjustments.
 
-The agent is an assistant, not a licensed professional. Prompts and skills push
-it to recommend an attorney, appraiser, or lender rather than substitute for
-one.
+The agent is an assistant, not a licensed professional. Its prompts push it to
+recommend an attorney, appraiser or lender rather than act as one.
 
 ## Configuration
 
 | Variable | Default | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Required. |
-| `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` / `LANGSMITH_PROJECT` | — | Recommended. Current names — use these. The legacy `LANGCHAIN_*` spellings still work as fallbacks (see below). |
-| `REA_MODEL` | `anthropic:claude-opus-5-5` | Orchestrator. Keep the `provider:model` prefix: `require_api_key()` reads it to decide which key to demand, and assumes Anthropic without one. |
-| `REA_SUBAGENT_MODEL` | see below | Every specialist. With this and `REA_MODEL` both unset, the shipped per-role models apply: Sonnet 5.5 for search, review and liaison, Opus 5.5 for the analyst. Setting either restores "inherit". |
-| `REA_MODEL_PROPERTY_SEARCH` / `REA_MODEL_MARKET_ANALYST` / `REA_MODEL_DOCUMENT_REVIEWER` / `REA_MODEL_CLIENT_LIAISON` | inherits `REA_SUBAGENT_MODEL` | One specialist; beats the shipped default for that role. An explicit `build_agent(subagent_model=...)` beats all of these. |
-| `REA_EFFORT` | none sent (API default) | Orchestrator effort: `low`, `medium`, `high`, `xhigh`, `max`. Anything else stops startup. |
-| `REA_SUBAGENT_EFFORT` | inherits `REA_EFFORT` | Specialists' effort. |
-| `REA_EFFORT_PROPERTY_SEARCH` / `_MARKET_ANALYST` / `_DOCUMENT_REVIEWER` / `_CLIENT_LIAISON` | inherits `REA_SUBAGENT_EFFORT` | One specialist's effort. |
+| `ANTHROPIC_API_KEY` | — | Required |
+| `LANGSMITH_API_KEY`, `LANGSMITH_TRACING`, `LANGSMITH_PROJECT` | — | Recommended. Legacy `LANGCHAIN_*` names still work and can switch tracing on |
+| `REA_MODEL` | `anthropic:claude-opus-5-5` | Orchestrator. Keep the `provider:` prefix; the API-key check reads it |
+| `REA_SUBAGENT_MODEL` | per role | All specialists. Unset (with `REA_MODEL` also unset) means Sonnet 5.5 for search, review and liaison, and Opus 5.5 for the analyst |
+| `REA_MODEL_<ROLE>` | `REA_SUBAGENT_MODEL` | One specialist: `PROPERTY_SEARCH`, `MARKET_ANALYST`, `DOCUMENT_REVIEWER` or `CLIENT_LIAISON` |
+| `REA_EFFORT` | API default | Orchestrator effort: `low`, `medium`, `high`, `xhigh` or `max` |
+| `REA_SUBAGENT_EFFORT` | `REA_EFFORT` | All specialists |
+| `REA_EFFORT_<ROLE>` | `REA_SUBAGENT_EFFORT` | One specialist |
 
-**On the legacy `LANGCHAIN_*` names.** An earlier version of this table said they
-"no longer work". That is wrong, and worth stating precisely because the mistake
-runs in the unsafe direction: langsmith 0.14.12 still reads ten of them —
-`LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT`,
-`LANGCHAIN_SESSION`, `LANGCHAIN_ENDPOINT`, `LANGCHAIN_BASE_URL`,
-`LANGCHAIN_CUSTOM_HEADERS`, `LANGCHAIN_REVISION_ID`, `LANGCHAIN_LOG`,
-`LANGCHAIN_TRACING_SAMPLING_RATE`. (This said nine until 0.14.12; 0.14.2 read the
-sampling rate too, so that was a miscount, not a change upstream.) Measured:
-`LANGCHAIN_TRACING_V2=true` alone turns tracing **on**, and `LANGCHAIN_API_KEY`
-and `LANGCHAIN_PROJECT` are both honoured. So a stale legacy variable in a shell
-profile can start billing traces even though nothing in `.env` mentions
-LangSmith. The `LANGSMITH_*` spellings take precedence where both are set —
-`LANGSMITH_TRACING=false` beats `LANGCHAIN_TRACING_V2=true`, which is why
-`tests/conftest.py` assigning the modern name is sufficient to keep the suite
-offline. Prefer the `LANGSMITH_*` names; don't assume the old ones are inert.
-
-**What a trace carries.** Both entry points build their run config through
-`run_config()` in `config.py`, so every trace is tagged `cli` or `web` and its
-root run's metadata records `entry_point`, `model`, `subagent_model`,
-`require_approval` and `app_version` — the models the conversation actually
-ran on, including a preset chosen in the chat sidebar. Tags and metadata are inherited by every
-nested subagent, model and tool run, so a metadata filter on
-`require_approval` finds every `save_draft` that ran with no gate in the stack.
-`thread_id` is not restated: LangGraph already copies it from `configurable`
-into metadata (measured on langgraph 1.2.12), which is what groups a
-conversation's turns in LangSmith's Threads view. A thread started in the CLI
-and continued in the browser stays one thread, each turn tagged with the
-surface it actually ran on.
+Every trace is tagged `cli` or `web` and records the models, approval setting
+and app version in its metadata.
 
 ## Development
 
-Three checks, all of which must pass. No API calls, no key required:
+Three checks, all offline with no API key needed:
 
 ```bash
-scripts/check.sh              # runs all three with the pinned versions
+scripts/check.sh            # all three, with pinned tool versions
+scripts/check.sh --floor    # also runs the suite on Python 3.11
 ```
 
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 142 tests, ~1.5s
-uvx ty@0.0.91 check           # type check
-uvx ruff@0.17.2 check .       # lint
+uv run pytest tests/ -q     # 142 tests, ~1.5s
+uvx ty@0.0.91 check         # type check
+uvx ruff@0.17.2 check .     # lint (ruff format is deliberately not used)
 ```
 
-Development is pinned to Python 3.14, so the `requires-python = ">=3.11"` floor
-needs an explicit run. `--isolated` keeps it out of your project venv:
-
-```bash
-uv run --python 3.11 --isolated pytest tests/ -q
-```
-
-The definition of done is "N tests, ty clean, ruff clean", and both tool
-versions are pinned deliberately — each is pre-1.0, so an unpinned run can
-report a different result on identical source. ruff enforces its own pin via
-`required-version` and will refuse to run if you drop it; ty has no equivalent,
-so that one is on you. `ruff format` is deliberately **not** used here — see
-`CLAUDE.md`.
+CI runs `scripts/check.sh --floor` and `uv sync --locked` on every push and PR.
+When `version` in `pyproject.toml` names a new tag, a green push to `main`
+publishes a GitHub release.
 
 ### Evaluations
 
-`evals/` grades the agent in LangSmith against two datasets, built offline from
-the mock:
+`evals/` grades the live agent in LangSmith against two datasets built offline
+from the mock:
 
-| Dataset | Asks |
+| Dataset | Checks |
 |---|---|
-| `scenarios.json` | Did the answer state the right facts — listing ids, months of inventory, comp count, value range, lead tier — and did the orchestrator delegate to the right specialist, which then called the right tools? |
+| `scenarios.json` | Correct facts (listing ids, months of inventory, comps, value range, lead tier) and correct delegation and tool use |
 | `guardrails.json` | Fair housing, no send, write containment, checkpoint privacy, no invented listings, no legal opinions, no pressure tactics |
 
-Expected facts are **computed, not recorded**: `evals/build_datasets.py` runs
-the agent's own tools against `MockListingsProvider`, so they are ground truth
-for the seeded dataset rather than a snapshot of what one model run said. The
-JSON is committed for review, and `test_eval_datasets_match_the_mock` fails the
-moment a mock change moves an expected answer. Facts and route share one
-example so each query is answered once and graded both ways — a LangSmith
-experiment runs one dataset, and every answer here is a live multi-agent run.
-
-`evals/evaluators.py` holds the graders: code for anything a pattern can
-decide (cited ids, stated figures, delegation order, required and forbidden
-tools, a successful `save_draft`), and one AI grader on Claude Haiku 5.5 for
-what it cannot — the guardrail rubrics, and flags such as "presented a thin
-comp set as a rough indication". A grader that does not apply to an example
-scores `None`, never a pass, so a skipped check cannot lift an average.
-
-CMA figures are graded as **bounds, not values**. The comparables tool returns
-a raw $/sqft spread, and the `cma-analysis` skill has the analyst adjust each
-comp and drop weak ones — the first live run kept 4 of 8 for MLS-1085 and gave
-$455k–$500k against a raw $406,633–$497,308. So a correct answer states at least
-3 comps and no more than the tool found, and a range inside the raw spread;
-which side of value the list price sits on is a rubric line for the judge. The
-three documents scenarios review the synthetic files in `evals/fixtures/documents/`
-— a purchase agreement, a residential lease and a seller disclosure, each with
-four problems planted from the `document-review` skill's checklist for its type.
-All three are copied in for each documents example, so every query names its
-document; every other example runs against an empty documents folder, because a
-fixture lease beside the `no-legal-opinion` guardrail ("my lease says…") would
-give the agent a real lease to review in place of the one the user describes.
-The files to seed travel in each example's `inputs`, the only part of an example
-the target sees, so the uploader compares and writes `inputs` as well.
-
 ```bash
-uv run python -m evals.build_datasets          # regenerate the JSON (offline)
-uv run python -m evals.upload_datasets         # create or update in LangSmith; asks first
+uv run python -m evals.build_datasets              # regenerate the JSON (offline)
+uv run python -m evals.upload_datasets             # create or update in LangSmith; asks first
 uv run python -m evals.run_experiments --limit 2   # LIVE and billed; asks first
 uv run python -m evals.run_experiments --scenario cma-no-comps
-REA_MODEL_MARKET_ANALYST=anthropic:claude-sonnet-5-5 … uv run python -m evals.run_experiments --label B
 ```
 
-A configuration is a set of `REA_*` variables on the command line, never a
-flag: `config.py` reads them at import. `--label` names it — appended to the
-experiment name, recorded in its metadata beside every role's model and effort.
-`.env` fills in any variable the command line leaves unset, so a configuration
-meant as "the defaults" has to set each one explicitly; check the plan the
-runner prints before confirming.
-
-Building contacts nothing. Upload with `evals.upload_datasets`, not
-`langsmith dataset upload`: the CLI rejects an existing name, so it cannot
-update a dataset without deleting it and its experiments, and it drops each
-example's metadata, which is what `--scenario` selects on. The uploader edits
-examples in place; LangSmith versions the dataset, so earlier experiments keep
-the version they ran against. The runner then needs
-`ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY`, prints an estimate from the shipped
-configuration's measured runs (about $0.06–$0.52 per example; all-Opus ran about
-1.5× that), warns when the configuration differs from the one measured, and
-asks before spending. It runs the agent in a throwaway project root holding a
-copy of `skills/`, emptied before each example and one example at a time —
-specialists read their own files back, so a shared workspace would leak one
-example's shortlist into the next.
-
-`capture` is exercised offline against the real graph with a scripted model,
-and every grader against hand-built runs. Live coverage is thin: a four-example
-smoke run, which is what exposed the CMA and documents graders scoring correct
-behaviour as wrong.
-
-That versioning has a consequence for a **new rubric line**: it cannot be
-checked by re-grading old experiments in LangSmith. `evaluate_existing` (langsmith
-0.14.12) loads each example `as_of` the experiment's recorded `dataset_version`,
-so the stored runs are graded against the reference from before the line existed
-and score "not applicable". To validate a line against answers you already have,
-fetch the stored root runs read-only (`Client.list_runs(project_name=...,
-is_root=True)`; their `outputs` are what `evals/target.py` returned) and call
-`make_rubric(make_judge())` on each with the *local* example from
-`evals/datasets/`, with `LANGSMITH_TRACING=false` so the judge calls leave no
-traces. It costs only the judge. This is how the `must_present_minimums_as_met`
-line was checked: it scored the three stored answers that called larger homes
-non-matches 0, and the three after the fix 1, including the two that said,
-truthfully, that none had exactly 3 bedrooms.
-
-The grader moved from Haiku 4.5 at `temperature=0` to Haiku 5.5, which rejects
-any non-default sampling parameter, so grading is no longer pinned to a
-temperature. Rubric scores from before that change and after it are not
-directly comparable; compare experiments graded by the same `judge_model`,
-which every experiment records in its metadata.
-
-### CI
-
-`.github/workflows/check.yml` runs `scripts/check.sh --floor` on Linux for every
-push and PR, plus `uv sync --locked` so a stale `uv.lock` fails the build. It
-calls the script rather than restating the tools, which is the point of having
-the script: one place decides what "done" means. No secrets — the suite is
-entirely offline.
-
-A second job releases. When `version` in `pyproject.toml` names a tag that does
-not exist yet, a push to `main` that passes the checks tags that commit and
-publishes a GitHub release, with notes built from the commit subjects since the
-previous tag. It is gated on `needs: check`,
-so a release is never cut from a red commit, and it is the only job holding a
-writable token — `check` stays read-only.
-
-### Why "offline" is enforced rather than asserted
-
-That claim used to be false, and how it failed is worth keeping in view.
-
-**The defect.** `config.py` called `load_dotenv()` at import and `.env.example`
-documents `LANGSMITH_TRACING=true`, so a developer with a real `.env` had every
-`tool.invoke()` in the suite reporting to LangSmith as its own root run — 17 per
-run, against a Stop hook that runs the suite every turn. LangSmith bills per
-trace, so those one-span traces cost the same as full agent conversations, and
-the tests outspent the runs worth tracing. CI never had the problem — a clean
-checkout has no `.env` — which is why nothing in the build logs revealed it.
-
-**The fix: `.env` is read by the entry points, not by the package.** Import-time
-`load_dotenv()` in a library module applies one developer's configuration to
-every consumer, and the trace bill was only its most expensive symptom —
-`REA_MODEL` handed the tests a different graph, `REA_PROJECT_ROOT` repointed the
-file roots they assert against. The ordering is load-bearing: `PROJECT_ROOT`,
-`DEFAULT_MODEL` and `SUBAGENT_MODEL` are evaluated when `config.py` is imported,
-so `main.py` keeps the call *and* its package imports inside `main()`. One
-consequence for library use — `from real_estate_agent import build_agent` no
-longer picks up `.env` on its own, so a caller supplies the environment the way
-any other library expects. `tests/conftest.py` still forces tracing off as a
-second line, since a variable exported in a shell never went through `.env` at
-all. Live runs via `main.py` and Streamlit trace normally.
-
-**The guard that proved nothing.** `test_the_suite_does_not_trace_to_langsmith`
-originally asserted only that tracing was off, which is true by default anywhere
-there is no `.env` — so on CI it passed with the fix **deleted**, and the check
-fired only on the one machine that already had the problem. It now asserts the
-value the conftest writes, which is absent on a clean checkout and wrong on a
-configured one, so both fail. A `pytest_collection_finish` hook also aborts the
-session before the first tool call rather than reporting after the last, which
-covers `-k`-filtered runs that never collect the test.
-
-## Verified behaviour
-
-Both tables ran against the **previous** Austin/Round Rock fixture, so their
-listing ids and statuses are from that dataset — `MLS-1022` was a pending Austin
-townhouse and is now a sold Waikiki condo. The behaviours each row checks still
-hold; the specific evidence is not reproducible without regenerating that
-dataset. Re-run rather than re-read if you need the ids.
-
-### The CLI
-
-Run live against `anthropic:claude-opus-5`, traces in LangSmith:
-
-| Check | Result |
-|---|---|
-| Orchestrator delegates rather than answering directly | `task` at root; 6/6 correct matches |
-| Subagents load their skills | ±20% size screen and 25% adjustment-drop threshold applied — both exist only in `SKILL.md` |
-| Planning and cross-specialist handoff | 3× `write_todos`, 2 delegations, liaison read the analyst's CMA file |
-| Write containment | `permission denied` on `/src/notes.md`; nothing written outside `workspace/` |
-| Fair-housing guardrail | Refused "family-friendly", "young professionals", "safe neighborhood", "good schools" with the legal basis for each, and supplied compliant copy |
-| Approval gate, both directions | Approve writes the draft; reject blocks it; exhausted/absent input **fails closed** rather than crashing or approving |
-
-### The web UI
-
-Then run live against the same model, with approval switched on:
-
-| Check | Result |
-|---|---|
-| Streaming and dedupe | Tool calls and results render as they arrive; no message printed twice |
-| Delegation | `task(subagent_type=client-liaison)` from the orchestrator, never answered inline |
-| Reject | Rejection reached the specialist; nothing written to `drafts/`; the orchestrator re-planned from the stated reason — `write_todos`, then `task(property-search)` with "Do not estimate or infer anything" |
-| Cross-specialist handoff | property-search wrote `/workspace/documents/mls-1022-facts.md`; the orchestrator pointed client-liaison at that path, and it drafted from the real figures |
-| Approve | `.md` and `.eml` both written, `X-Unsent: 1` present, real listing data, and the model flagged the pending status rather than guessing whether the contract would close |
-| Workspace browser | Populated as specialists wrote; the checkpoint database stayed out of it |
-
-### Defects — Streamlit widget state
-
-Five, since fixed and regression-tested: three the web-UI run exposed, two a
-later code review found in the same family. All five are one Streamlit rule —
-**widget state is keyed and lifecycle-bound** — and none of them raised.
-
-- **The approval toggle switched itself off.** `st.rerun()` fires from inside
-  the sidebar, which aborts the run before any widget declared after it renders
-  — and Streamlit drops a keyed widget's value on a run where it does not
-  render. So switching approval on and then clicking "New conversation" left the
-  requirement off, and the next `save_draft` would have been written unattended.
-  The toggle is now declared first, with `persist_state="session"` behind it.
-- **The approval form re-displayed the previous call's arguments.**
-  `st.text_area(..., key=...)` stores its first value in session state and
-  reuses it, so a second interrupt at the same index showed a stale payload
-  while the decision applied to the live one — the form still showed a
-  placeholder body after the specialist had redrafted with real figures. A
-  reviewer would have approved text they never saw. Arguments now render with
-  `st.code`, which holds no state.
-- **"Resume a thread" had a dead button.** A bare `st.text_input` commits on
-  blur or Enter, so a plain button beside it submitted the *previous* value:
-  typing an id and clicking Load did nothing, silently, until you pressed Enter
-  first. Both now live in one `st.form`.
-- **The decision control kept the previous reviewer's answer.** The same rule as
-  the argument display, one widget over — and worse, because it defeats the
-  fail-closed default rather than only showing stale text. `default="Reject"`
-  applies to a key Streamlit holds no value for; on any later render the stored
-  value wins. So approving one call left the *next* interrupt's form already
-  reading "Approve", and a reviewer who checked the new arguments and pressed
-  submit approved something they never chose. Measured: `clear_on_submit=True`
-  does not restore the default and deleting the key mid-run breaks the widget.
-  The keys now carry a round number that advances on every submission.
-- **The workspace list lagged a turn behind.** The sidebar is built near the top
-  of a run, before the turn writes anything, and the page only re-ran when an
-  interrupt was pending — so the answer on screen could cite a CMA by path while
-  the sidebar still read "Nothing written yet". A turn now always re-runs.
-
-Re-verified live afterwards, with the redraft loop that produces a second
-interrupt: an identical filename and subject with a changed body — the exact
-shape the stale-argument bug hid — displayed the new body, and the text written
-on approval matched the text on screen byte for byte.
-
-### Defects the CLI run exposed
-
-Three, since fixed:
-
-- **`comparables()` ranked by similarity but never *rejected* on size**, handing
-  back comps the CMA methodology discards anyway. It now applies a size screen
-  and reports what it filtered, so a thin comp set is distinguishable from a
-  thin market.
-- **The mock spread square footage too widely for the dataset size**, so small
-  properties had no size-matched comps and no CMA was possible. Sizes now
-  cluster; 17 of 22 active listings clear the 3-comp minimum, and the other 5
-  remain genuine outliers so the insufficient-comps path stays reachable.
-- **client-liaison had two ways to write a draft** and used both, producing
-  divergent copies. `save_draft` is now the only sanctioned path.
-
-### Defects a later code review found
-
-Since fixed and regression-tested:
-
-- **`--require-approval` was unusable.** The resume payload was a bare list, but
-  the middleware reads `interrupt(request)["decisions"]` — so answering the
-  prompt raised `TypeError` on both approve and reject. It also built one
-  decision regardless of how many tool calls were pending, which the middleware
-  rejects outright.
-- **`market_statistics` divided by `months_back` without filtering by it**, so
-  the same 16 sales yielded months-of-inventory of 5.2 or 21.0 — flipping the
-  reading from balanced to extreme buyer's market. The window is now applied to
-  the sales themselves, via a `sold_within_months` provider filter.
-- **`qualify_lead` blamed the budget for a bedroom shortfall**, reporting a $2M
-  budget in a sub-$800k market as clearing "only 8% of inventory". Budget share
-  is now measured against listings that already meet the non-price requirements.
-- **`status="Active"` returned zero listings** — string filters were
-  case-sensitive, which reads to the agent as an empty market. Now
-  case-insensitive, and the tool exposes proper enums.
-- **A newline in an email subject** raised after the `.md` was already written,
-  leaving an orphan pointing at a `.eml` that never existed. Headers are
-  flattened first and the message is built before anything is written.
-- **Plus, in the same pass:** same-second drafts no longer clobber each other,
-  text extraction is size-capped like the PDF branch, `lot_sqft` can't go
-  negative, the dataset has one `_TODAY`, and `require_api_key` derives the
-  needed key from the model's provider prefix instead of always demanding an
-  Anthropic one.
-
-## Notes on deepagents 0.7.32
-
-`write_todos` is **not** added automatically. The middleware stack resolves from
-a per-`provider:model` harness profile, so planning may or may not be present
-depending on the model string. `agent.py` pins `TodoListMiddleware()` explicitly
-rather than depending on that resolution — `tests/` asserts it stays wired.
-
-This held on 0.7.1 and was re-verified on 0.7.8, 0.7.21 and 0.7.32 by building the graph with and
-without the explicit middleware and diffing the tool list: `write_todos` appears
-only in the pinned build. Write containment was re-verified the same way — the
-first-match-wins rule evaluation and the unmatched-defaults-to-allow fallback are
-unchanged, and the `execute` tool still refuses to run because `FilesystemBackend`
-is not a `SandboxBackendProtocol`. The tool list also carries `delete`, present
-since at least 0.7.21 and undocumented here until 0.7.32: deepagents evaluates it
-as a `write`, so the same catch-all deny covers it.
+Expected answers are computed from the agent's own tools, not recorded from a
+model run. Runs cost about $0.06–$0.52 per example on the shipped models. See
+[`docs/design-notes.md`](docs/design-notes.md#evaluations-in-depth) for the
+graders, configurations and validating new rubric lines.
