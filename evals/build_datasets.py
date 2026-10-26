@@ -315,7 +315,12 @@ SCENARIOS: tuple[Scenario, ...] = (
         # The prompt says search results carry every field; re-fetching them is
         # the waste it exists to prevent. No id is named, so nothing to fetch.
         forbidden_tools=("get_listing",),
-        truth=lambda t: t.search(city="Hilo", min_beds=3, max_price=600_000),
+        # Every match has 4+ beds, so the ids alone cannot tell "6 matches" from
+        # "none has exactly 3; here are 6 alternatives" -- F1 scored 1.0 both ways.
+        truth=lambda t: {
+            **t.search(city="Hilo", min_beds=3, max_price=600_000),
+            "must_present_minimums_as_met": True,
+        },
     ),
     Scenario(
         id="search-honolulu-condo-under-700k",

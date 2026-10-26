@@ -18,6 +18,7 @@
         "MLS-1104",
         "MLS-1105"
       ],
+      "must_present_minimums_as_met": true,
       "expected_delegations": [
         "property-search"
       ],
