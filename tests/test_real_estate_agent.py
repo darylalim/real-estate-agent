@@ -902,6 +902,21 @@ def _tool_names(agent) -> set[str]:
     return names
 
 
+def test_the_orchestrator_states_the_price_verdict_in_words() -> None:
+    """Prompt text is behaviour, so the rule is pinned by its words.
+
+    Measured in step 4: with Sonnet specialists the final CMA summary gave the
+    figures (best estimate ~$475k against a $501k list) but never said the list
+    price was above what the comps support, in both runs; all-Opus said it
+    outright in both. The verdict is what a buyer acts on, so it is stated,
+    not left to be inferred from numbers.
+    """
+    from real_estate_agent.agent import ORCHESTRATOR_PROMPT
+
+    prompt = " ".join(ORCHESTRATOR_PROMPT.split())
+    assert "above, within, or below the value the comparable sales support" in prompt
+
+
 def test_agent_exposes_planning_and_delegation(monkeypatch) -> None:
     """`write_todos` is not automatic (0.7.1, re-verified 0.7.8, 0.7.21, 0.7.32) — the prompt needs it."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
