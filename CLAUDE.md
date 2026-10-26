@@ -49,6 +49,13 @@ uvx ruff@0.17.2 check .                          # lint — pinned; rule set in 
 Markdown fence binds whoever reads the fence, the script binds whoever runs it. The individual commands above
 still work and are worth knowing, but the script is the one to run before saying you are done.
 
+**Checking an older commit in a fresh worktree needs `uv sync --locked` first.** `check.sh` runs ty before
+pytest, and pytest's `uv run` is the first thing that creates the worktree's `.venv` — so on a clean checkout
+ty finds no environment and fails every third-party import (`streamlit`, `pandas`, `langgraph`) with
+`unresolved-import`, while the tests behind it pass. That reads as a broken commit and is not one. CI is
+immune because its `uv sync --locked` step runs before the script. Measured 2026-10-26, checking that each
+step of a split milestone was green on its own.
+
 **Definition of done in this repo is "N tests, ty clean, ruff clean"** — most commit messages end with some
 form of it, though not all: `9227e4d` has no done-line and `da55993` ends "21 tests, no API calls. Live
 end-to-end behaviour is unverified." Follow it going forward rather than reading it as an invariant already
@@ -383,6 +390,19 @@ measured on `market.py`, whose selectboxes are all in the sidebar, `at.get("sele
 `at.get("segmented_control")` returns `[]` and `at.get("button_group")` returns 1. The typed accessor
 (`at.segmented_control`) is the one that reads the way you expect. Nearly every measured claim in this
 section came from one of those three; a claim from none of them is a guess.
+
+**`AppTest` cannot see colour or screen width, so those claims need a real browser — the first such check
+corrected a premise the contrast test was written on.** That test reads `config.toml`, but only the rendered page shows
+which colour a pair actually uses: on 1.66 `st.metric`'s delta is a badge, `greenColor` at 10% behind text
+Streamlit darkens itself, not `greenColor` as text. Two things to do every time:
+- **Bind to loopback:** `uv run streamlit run streamlit_app.py --server.address 127.0.0.1`. The default
+  listens on every interface and prints a LAN and a public URL, and anyone who reaches the port drives an
+  agent on your API key. `confirm-live-run.sh` asks before the command but does not look at the flags.
+- **Test widths in a same-origin iframe** when the browser window will not resize (a full-screen Chrome
+  ignores `resize_window` and still reports success — check `innerWidth`). Load the app's URL into an
+  `<iframe style="width:375px">` on a page served from the same port: the page inside treats the frame as
+  its viewport, so the 640px column breakpoint fires as it would on a phone, and the frame's
+  `contentDocument` can be measured directly rather than read off a screenshot.
 
 **All of these live outside `src/real_estate_agent/`, deliberately.** The package exposes `build_agent` through a
 lazy `__getattr__` so importing a provider does not drag in LangChain; putting Streamlit imports inside it
