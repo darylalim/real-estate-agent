@@ -2301,6 +2301,67 @@ def test_streamlit_keys_messages_exactly_as_the_cli_does() -> None:
         assert message_key(message) == main._message_key(message)
 
 
+def test_prices_are_not_rendered_as_latex() -> None:
+    """`st.markdown` reads the text between two `$` as a KaTeX expression.
+
+    Found in a README screenshot: "MLS-1096 ($615k, pending), MLS-1103 ($640k)"
+    rendered the span between the prices as italic maths, and nothing raised.
+    Each case below was checked in a browser on Streamlit 1.66 -- `\\$` renders
+    as a plain dollar, and a code span renders verbatim, so escaping inside one
+    would show the backslash.
+    """
+    from ui.agent_session import _plain_dollars
+
+    assert _plain_dollars("($615k, pending), MLS-1103 ($640k)") == (
+        r"(\$615k, pending), MLS-1103 (\$640k)"
+    )
+    assert _plain_dollars("`price > $500k` and $1") == r"`price > $500k` and \$1"
+    assert _plain_dollars("```\n$1 $2\n```") == "```\n$1 $2\n```"
+    assert _plain_dollars(r"\$5 and $6") == r"\$5 and \$6"
+
+
+def test_every_markdown_call_in_render_message_escapes_dollars() -> None:
+    """The escape only works on the calls that go through it.
+
+    Read off the tree rather than the text, so a new `st.markdown` or
+    `st.caption` added to `render_message` without the escape fails here.
+    """
+    tree = ast.parse((PROJECT_ROOT / "ui" / "agent_session.py").read_text(encoding="utf-8"))
+    render = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "render_message"
+    )
+    calls = [
+        node
+        for node in ast.walk(render)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"markdown", "caption"}
+    ]
+    assert len(calls) == 3, "the transcript's markdown calls changed; re-check them"
+    for call in calls:
+        argument = call.args[0]
+        if isinstance(argument, ast.JoinedStr):
+            wrapped = [
+                part.value
+                for part in argument.values
+                if isinstance(part, ast.FormattedValue)
+                and isinstance(part.value, ast.Call)
+                and isinstance(part.value.func, ast.Name)
+                and part.value.func.id == "_plain_dollars"
+            ]
+            # The caption's tool name comes from code, not the model; its
+            # arguments are model output.
+            assert wrapped, f"line {call.lineno}: model text not escaped"
+        else:
+            assert (
+                isinstance(argument, ast.Call)
+                and isinstance(argument.func, ast.Name)
+                and argument.func.id == "_plain_dollars"
+            ), f"line {call.lineno}: model text not escaped"
+
+
 def test_the_workspace_browser_never_offers_the_checkpoint_store(
     tmp_path, monkeypatch
 ) -> None:
