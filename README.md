@@ -198,8 +198,8 @@ one.
 | `ANTHROPIC_API_KEY` | — | Required. |
 | `LANGSMITH_API_KEY` / `LANGSMITH_TRACING` / `LANGSMITH_PROJECT` | — | Recommended. Current names — use these. The legacy `LANGCHAIN_*` spellings still work as fallbacks (see below). |
 | `REA_MODEL` | `anthropic:claude-opus-5-5` | Orchestrator. Keep the `provider:model` prefix: `require_api_key()` reads it to decide which key to demand, and assumes Anthropic without one. |
-| `REA_SUBAGENT_MODEL` | inherits `REA_MODEL` | Specialists. |
-| `REA_MODEL_PROPERTY_SEARCH` / `REA_MODEL_MARKET_ANALYST` / `REA_MODEL_DOCUMENT_REVIEWER` / `REA_MODEL_CLIENT_LIAISON` | inherits `REA_SUBAGENT_MODEL` | One specialist. An explicit `build_agent(subagent_model=...)` beats all of these. |
+| `REA_SUBAGENT_MODEL` | see below | Every specialist. With this and `REA_MODEL` both unset, the shipped per-role models apply: Sonnet 5.5 for search, review and liaison, Opus 5.5 for the analyst. Setting either restores "inherit". |
+| `REA_MODEL_PROPERTY_SEARCH` / `REA_MODEL_MARKET_ANALYST` / `REA_MODEL_DOCUMENT_REVIEWER` / `REA_MODEL_CLIENT_LIAISON` | inherits `REA_SUBAGENT_MODEL` | One specialist; beats the shipped default for that role. An explicit `build_agent(subagent_model=...)` beats all of these. |
 | `REA_EFFORT` | none sent (API default) | Orchestrator effort: `low`, `medium`, `high`, `xhigh`, `max`. Anything else stops startup. |
 | `REA_SUBAGENT_EFFORT` | inherits `REA_EFFORT` | Specialists' effort. |
 | `REA_EFFORT_PROPERTY_SEARCH` / `_MARKET_ANALYST` / `_DOCUMENT_REVIEWER` / `_CLIENT_LIAISON` | inherits `REA_SUBAGENT_EFFORT` | One specialist's effort. |
@@ -243,7 +243,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 112 tests, ~1.5s
+uv run pytest tests/ -q       # 114 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```
@@ -324,8 +324,9 @@ update a dataset without deleting it and its experiments, and it drops each
 example's metadata, which is what `--scenario` selects on. The uploader edits
 examples in place; LangSmith versions the dataset, so earlier experiments keep
 the version they ran against. The runner then needs
-`ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY`, prints an estimate from the two
-measured CLI runs (about $0.17–$0.63 per example on Claude Opus 5.5), and
+`ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY`, prints an estimate from the shipped
+configuration's measured runs (about $0.06–$0.52 per example; all-Opus ran about
+1.5× that), warns when the configuration differs from the one measured, and
 asks before spending. It runs the agent in a throwaway project root holding a
 copy of `skills/`, emptied before each example and one example at a time —
 specialists read their own files back, so a shared workspace would leak one

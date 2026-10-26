@@ -1061,6 +1061,33 @@ def test_unset_roles_fall_back_to_the_shared_specialist_model() -> None:
     }
 
 
+def test_the_shipped_role_models_apply_only_when_nothing_is_configured() -> None:
+    """Step 4's choice is the default for someone who set nothing, and only for them.
+
+    Sonnet 5.5 for search, review and liaison, Opus 5.5 for the analyst: equal
+    on every guardrail, code grader and planted clause, at 35% less per task.
+    But `REA_MODEL=X` has always meant every role on X, and
+    `REA_SUBAGENT_MODEL=X` every specialist on X -- built-in Sonnet defaults
+    overriding either would change a working `.env` and could demand a key
+    for a provider nobody chose.
+    """
+    from real_estate_agent.config import role_models_from
+
+    opus, sonnet = "anthropic:claude-opus-5-5", "anthropic:claude-sonnet-5-5"
+    shipped = {
+        "property-search": sonnet,
+        "market-analyst": opus,
+        "document-reviewer": sonnet,
+        "client-liaison": sonnet,
+    }
+    assert role_models_from({}) == shipped
+    assert role_models_from({"REA_MODEL_MARKET_ANALYST": sonnet}) == shipped | {"market-analyst": sonnet}
+    assert set(role_models_from({"REA_MODEL": "openai:gpt-5"}).values()) == {"openai:gpt-5"}
+    assert set(role_models_from({"REA_SUBAGENT_MODEL": opus}).values()) == {opus}
+    # Configuration A, as step 4 ran it: every variable pinned, so nothing shipped applies.
+    assert set(role_models_from({"REA_MODEL": opus, "REA_SUBAGENT_MODEL": opus}).values()) == {opus}
+
+
 def test_require_api_key_covers_a_model_only_one_role_uses(monkeypatch) -> None:
     """A role on another provider would otherwise fail mid-run with a 401."""
     from real_estate_agent import config
@@ -1810,6 +1837,27 @@ def test_an_experiment_records_its_label_and_every_role() -> None:
         snake = role.replace("-", "_")
         assert f"model_{snake}" in metadata
         assert f"effort_{snake}" in metadata
+
+
+def test_the_runners_measured_configuration_is_the_shipped_one() -> None:
+    """The cost warning compares against `_MEASURED_ON`; the defaults ship in config.
+
+    Two homes for one configuration. If they drift, the runner either quotes
+    the shipped configuration's costs for a different one with no warning, or
+    warns on every default run until people stop reading it.
+    """
+    from evals.run_experiments import _MEASURED_ON
+    from real_estate_agent.config import (
+        SUBAGENT_ROLES,
+        resolve_effort,
+        role_models_from,
+    )
+
+    shipped = role_models_from({})
+    for role in SUBAGENT_ROLES:
+        assert _MEASURED_ON[f"model_{role.replace('-', '_')}"] == shipped[role]
+        assert _MEASURED_ON[f"effort_{role.replace('-', '_')}"] is None
+    assert _MEASURED_ON["effort"] is resolve_effort({}, "REA_EFFORT")
 
 
 def test_the_eval_uploader_plans_in_place_updates() -> None:

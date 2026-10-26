@@ -43,12 +43,26 @@ from evals import confirm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Measured 2026-09-30 on anthropic:claude-opus-5-5 by LangSmith's accounting,
-# one CLI run each: a simple search, and a CMA followed by an offer email. Two
-# runs are a range, not a distribution -- treat the estimate as an order of
-# magnitude, and re-measure after a model or effort change.
-_COST_PER_EXAMPLE = (0.17, 0.63)
-_MEASURED_MODEL = "anthropic:claude-opus-5-5"
+# Measured 2026-10-25 by LangSmith's accounting on the shipped configuration
+# (step 4's B-high: Opus 5.5 orchestrator and analyst, Sonnet 5.5 search,
+# reviewer and liaison, no effort sent): $0.06 for the cheapest delegating
+# example (fair-housing copy) to $0.52 for a CMA followed by an offer email,
+# over 21 runs. A range, not a distribution -- an order of magnitude; re-measure
+# after a model or effort change. All-Opus ran about 1.5x this.
+_COST_PER_EXAMPLE = (0.06, 0.52)
+# Every role's model, and that no effort was set, as model_metadata() reports them.
+_MEASURED_ON = {
+    "model": "anthropic:claude-opus-5-5",
+    "model_property_search": "anthropic:claude-sonnet-5-5",
+    "model_market_analyst": "anthropic:claude-opus-5-5",
+    "model_document_reviewer": "anthropic:claude-sonnet-5-5",
+    "model_client_liaison": "anthropic:claude-sonnet-5-5",
+    "effort": None,
+    "effort_property_search": None,
+    "effort_market_analyst": None,
+    "effort_document_reviewer": None,
+    "effort_client_liaison": None,
+}
 
 
 def _isolated_root() -> Path:
@@ -184,8 +198,9 @@ def _run(args: argparse.Namespace) -> int:
     for stem, examples in plan.items():
         print(f"  {DATASETS[stem][0]}: {len(examples)}")
     print(f"Estimated ${low:.2f}-${high:.2f}, plus {JUDGE_MODEL} grading.")
-    if DEFAULT_MODEL != _MEASURED_MODEL:
-        print(f"  (measured on {_MEASURED_MODEL}; this model's cost will differ)")
+    differs = sorted(key for key, value in _MEASURED_ON.items() if experiment_metadata(args.label).get(key) != value)
+    if differs:
+        print(f"  (measured on the shipped configuration; this one differs in {', '.join(differs)}, so its cost will too)")
     if not args.yes and not confirm("Proceed? [y/N] "):
         print("Nothing run.")
         return 0

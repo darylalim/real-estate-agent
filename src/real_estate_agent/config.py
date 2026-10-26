@@ -77,14 +77,47 @@ def role_variable(prefix: str, role: str) -> str:
     return f"{prefix}_{role.upper().replace('-', '_')}"
 
 
-def resolve_role_models(env: Mapping[str, str], fallback: str) -> dict[str, str]:
-    """Each role's ``REA_MODEL_<ROLE>``, else ``fallback``. Empty counts as unset."""
-    return {role: env.get(role_variable("REA_MODEL", role)) or fallback for role in SUBAGENT_ROLES}
+def resolve_role_models(
+    env: Mapping[str, str], fallback: str, shipped: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """Each role's ``REA_MODEL_<ROLE>``, else its ``shipped`` default, else ``fallback``.
+
+    Empty counts as unset.
+    """
+    return {
+        role: env.get(role_variable("REA_MODEL", role)) or (shipped or {}).get(role) or fallback
+        for role in SUBAGENT_ROLES
+    }
+
+
+# Measured in step 4 (2026-10-25, plan log): Sonnet 5.5 for search, review and
+# liaison matched all-Opus on every guardrail, code grader and planted clause,
+# at 35% less per task. The analyst stays on the orchestrator's model. Sent
+# with no effort: Sonnet 5.5's default is the `high` the measurement used.
+SHIPPED_ROLE_MODELS = {
+    "property-search": "anthropic:claude-sonnet-5-5",
+    "document-reviewer": "anthropic:claude-sonnet-5-5",
+    "client-liaison": "anthropic:claude-sonnet-5-5",
+}
+
+
+def role_models_from(env: Mapping[str, str]) -> dict[str, str]:
+    """Every specialist's model, from the environment.
+
+    The shipped per-role models apply only when neither ``REA_MODEL`` nor
+    ``REA_SUBAGENT_MODEL`` is set. Either one has always meant "these roles on
+    this model", and a built-in Sonnet default overriding it would change a
+    working ``.env`` -- and could demand a key for a provider nobody chose.
+    """
+    default = env.get("REA_MODEL") or "anthropic:claude-opus-5-5"
+    fallback = env.get("REA_SUBAGENT_MODEL") or default
+    configured = bool(env.get("REA_MODEL") or env.get("REA_SUBAGENT_MODEL"))
+    return resolve_role_models(env, fallback, None if configured else SHIPPED_ROLE_MODELS)
 
 
 # One specialist can be tuned without the others: a cheap model for the search
 # and a strong one for the CMA is a config change, not a code change.
-ROLE_MODELS = resolve_role_models(os.environ, SUBAGENT_MODEL)
+ROLE_MODELS = role_models_from(os.environ)
 
 # The API's effort levels. Unset means send none, so the API's own default
 # applies (`medium` on Opus 5.5, `high` on Sonnet 5.5) -- not "the lowest".

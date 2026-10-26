@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 112 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 114 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -553,8 +553,15 @@ being written.
   a bare `gpt-4o` makes it demand `ANTHROPIC_API_KEY` and never check the key the run needs. **No test holds
   any of this.** `config.py`, `README.md` and `.env.example` all carried the same wrong claim until it was
   corrected alongside this line; a grep for `provider:model` is the check nobody ran.
+- **The shipped per-role models apply only when neither `REA_MODEL` nor `REA_SUBAGENT_MODEL` is set.**
+  `SHIPPED_ROLE_MODELS` (Sonnet 5.5 for search, review and liaison) came out of the step-4 comparison: equal
+  on every guardrail, code grader and planted clause at 35% less per task. But either variable has always
+  meant "these roles on this model", and a built-in Sonnet default overriding it would change a working
+  `.env` and could demand a key for a provider nobody chose. `test_the_shipped_role_models_apply_only_when_
+  nothing_is_configured` pins the rule, and `test_the_runners_measured_configuration_is_the_shipped_one`
+  ties the runner's cost warning to it.
 - **An explicit `build_agent(subagent_model=...)` beats every environment variable, per-role ones included.**
-  The order is explicit argument → `REA_MODEL_<ROLE>` → `REA_SUBAGENT_MODEL` → `REA_MODEL`. The scripted-model
+  The order is explicit argument → `REA_MODEL_<ROLE>` → the shipped default (only when nothing is configured) → `REA_SUBAGENT_MODEL` → `REA_MODEL`. The scripted-model
   tests pass a fake as `subagent_model`; if an exported `REA_MODEL_PROPERTY_SEARCH` could override it, one
   specialist would quietly run on a real, billed model inside an "offline" suite.
   `test_an_explicit_subagent_model_beats_a_per_role_variable` pins it. The role names live twice — the
