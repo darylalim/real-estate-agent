@@ -7,9 +7,11 @@ containment rules, and which specialists exist.
 
 from __future__ import annotations
 
+from typing import Any
+
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import FilesystemBackend
-from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware
 from langchain.agents.middleware.human_in_the_loop import InterruptOnConfig
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
@@ -28,6 +30,11 @@ from real_estate_agent.config import (
 )
 from real_estate_agent.providers.base import ListingsProvider
 from real_estate_agent.providers.mock import MockListingsProvider
+from real_estate_agent.refusals import (
+    FallbackChatAnthropic,
+    RefusalNoticeMiddleware,
+    wants_server_fallback,
+)
 from real_estate_agent.subagents import build_subagents
 from real_estate_agent.tools import (
     make_comms_tools,
@@ -110,12 +117,17 @@ WORKSPACE_PERMISSIONS: list[FilesystemPermission] = [
 
 
 def chat_model(spec: str, effort: str | None) -> str | BaseChatModel:
-    """``spec`` with ``effort`` applied, or ``spec`` unchanged when there is none.
+    """``spec`` as a model carrying ``effort`` and any server-side fallback, or
+    ``spec`` unchanged when neither applies.
 
-    No effort keeps the plain string, so the default path is exactly what it
-    was before efforts existed. A spec that is already a model (the test
-    suite's scripted fakes) is returned as it is: there is nothing to apply an
-    effort to.
+    Neither applying keeps the plain string, so such a role's path is exactly
+    what it was before either existed. A spec that is already a model (the test
+    suite's scripted fakes) is returned as it is: there is nothing to apply.
+
+    Fallback is on wherever the model supports it (``refusals.SERVER_FALLBACK_
+    MODELS``), which on the shipped defaults is every role -- so those roles are
+    instances now, not strings. ``test_server_fallback_does_not_change_the_tool_
+    list`` is what shows deepagents resolves the same middleware either way.
 
     On Anthropic models whose profile lists ``xhigh``, langchain-anthropic pairs
     an effort with ``thinking: {"type": "adaptive", "display": "summarized"}``.
@@ -125,12 +137,22 @@ def chat_model(spec: str, effort: str | None) -> str | BaseChatModel:
     ``adaptive`` is that omitted default, stated explicitly.
     ``test_an_effort_changes_the_effort_and_nothing_else`` checks the payload.
     """
-    if effort is None or not isinstance(spec, str):
+    if not isinstance(spec, str):
         return spec
-    model = init_chat_model(spec, reasoning_effort=effort)
+    fallback = wants_server_fallback(spec)
+    if effort is None and not fallback:
+        return spec
+    kwargs: dict[str, Any] = {} if effort is None else {"reasoning_effort": effort}
+
+    def build(**extra: Any) -> BaseChatModel:
+        if fallback:
+            return FallbackChatAnthropic(model=spec.rpartition(":")[2], **kwargs, **extra)
+        return init_chat_model(spec, **kwargs, **extra)
+
+    model = build()
     levels = (getattr(model, "profile", None) or {}).get("reasoning_effort_levels") or ()
-    if provider_of(spec) == "anthropic" and "xhigh" in levels:
-        model = init_chat_model(spec, reasoning_effort=effort, thinking={"type": "adaptive"})
+    if effort is not None and provider_of(spec) == "anthropic" and "xhigh" in levels:
+        model = build(thinking={"type": "adaptive"})
     return model
 
 
@@ -197,12 +219,17 @@ def build_agent(
         },
     )
 
+    # A refused specialist would otherwise hand `task` an empty string.
+    for subagent in subagents:
+        subagent.setdefault("middleware", []).append(RefusalNoticeMiddleware())
+
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = (
         {"save_draft": True} if require_approval else None
     )
     if checkpointer is None:
         checkpointer = InMemorySaver()
 
+    middleware: list[AgentMiddleware[Any, Any, Any]] = [TodoListMiddleware(), RefusalNoticeMiddleware()]
     # The planning middleware is *not* added automatically — verified on 0.7.1
     # and again on 0.7.8, 0.7.21 and 0.7.32. The middleware stack is resolved from a
     # per-`provider:model` harness profile, so `write_todos` may or may not
@@ -211,7 +238,7 @@ def build_agent(
     return create_deep_agent(
         model=chat_model(model, effort),
         system_prompt=ORCHESTRATOR_PROMPT,
-        middleware=[TodoListMiddleware()],
+        middleware=middleware,
         subagents=subagents,
         backend=FilesystemBackend(root_dir=PROJECT_ROOT, virtual_mode=True),
         permissions=WORKSPACE_PERMISSIONS,

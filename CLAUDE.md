@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 134 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 138 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -81,10 +81,10 @@ python -c "import langsmith.utils"` still imports 0.14.12. `--isolated` is what 
 import succeeds whether or not the transitive path exists. A direct import gets a direct declaration.
 `.gitignore` already ignores `.ruff_cache/` and `.ty_cache/`.
 
-**`ruff check` yes, `ruff format` no.** The formatter would rewrite 10 of the 29 Python files — line-wrapping
+**`ruff check` yes, `ruff format` no.** The formatter would rewrite 17 of the 30 Python files — line-wrapping
 disagreements, not defects — and bury real diffs under cosmetic ones. Lint only. (`ruff format --check .`
-reports a total of 34, not 29: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
-this file, and the three `SKILL.md` files are in its denominator. All 10 rewrites are `.py`.) The two
+reports a total of 35, not 30: since 0.16 it also formats Python fences inside Markdown, so `README.md`,
+this file, and the three `SKILL.md` files are in its denominator. All 17 rewrites are `.py`; the count read 10 until M3 found it at 16 on an untouched `main`.) The two
 denominators read 14 and 19 when first written and drifted in silence as the repo grew, so
 `test_documented_file_counts_match_the_tree` now gates them — a caveat telling the next reader to re-derive
 was the same instruction that had already failed once. The rewrite count needs the formatter itself and
@@ -630,6 +630,21 @@ being written.
   no effort set, the spec stays a plain string: an effort turns it into a model instance, and
   `test_an_effort_does_not_change_the_tool_list` is what shows deepagents resolves the same middleware either
   way. Re-check both on a langchain-anthropic bump.
+- **Server-side fallback lives on the model; the refusal notice lives in middleware.** `refusals.py` holds
+  both, and they are split on purpose. langchain-anthropic 1.7.6 has no `fallbacks` field, so
+  `FallbackChatAnthropic` carries `fallbacks: "default"` in `model_kwargs` with the
+  `server-side-fallback-2026-07-01` beta (the array form takes `-2026-06-01`; each header 400s with the
+  other form). It is a subclass rather than plain kwargs because langchain stores the response's `fallback`
+  block via `model_dump()` -- field name `from_`, not the wire alias `from` -- and replays it verbatim, so
+  the turn after any fallback would be malformed; `_get_request_payload` drops the block, which the API
+  allows. That fix must sit on the model: deepagents' built-in `general-purpose` subagent runs on the
+  orchestrator's model and inherits none of our middleware. `RefusalNoticeMiddleware` is on the
+  orchestrator and all four specialists, *not* `general-purpose` -- a refusal there still comes back
+  empty, as it always did. Consequence for `chat_model`: every role on a `SERVER_FALLBACK_MODELS` model is
+  now an instance, not a string, even with no effort set; `test_server_fallback_does_not_change_the_tool_list`
+  holds the harness profile steady across that. Measured offline only (mock transport + payload) — **no
+  live refusal has been observed**, and the plan forbids provoking one. Re-check the `from_` replay on a
+  langchain-anthropic bump: if it starts dumping by alias, the strip becomes a no-op rather than wrong.
 - **`.env` is loaded by the entry points, never at package import.** `config.py` used to call `load_dotenv()`
   at module scope, which meant importing the package applied a developer's personal configuration to every
   consumer — the test suite included. Three variables leaked and each fails differently: `LANGSMITH_TRACING`
