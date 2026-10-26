@@ -94,16 +94,29 @@ codeBackgroundColor = "#F1F5F9"
 textColor = "#0F172A"                # Slate 900
 codeTextColor = "#334155"            # Slate 700
 linkColor = "#2563EB"
+# Borders sit at 1.48:1, under the 3:1 non-text guideline, by decision: they
+# group content (`st.container(border=True)` round the metric row and chart
+# panels) and inputs carry labels besides. Slate 500 would clear 3:1 and make
+# every container heavy. The contrast test skips this key on purpose.
 borderColor = "#CBD5E1"              # Slate 300
 
 # Semantic colours. `st.metric` draws its delta arrow in green/red, and the
 # market page reads asking-vs-achieved as exactly that signal — these need to
 # carry meaning at a glance, not merely pass contrast. Unlike the chart palette
-# these *are* per-mode, so each side is tuned to its own background.
-greenColor = "#059669"
+# these *are* per-mode, so each side is tuned to its own background. The target
+# is 4.5:1 because `:green[…]`-style markdown draws them as text, raw. The
+# metric delta does not: on 1.66 it is a badge, this colour at 10% behind text
+# Streamlit darkens itself (measured in the browser: rgb(1, 45, 32) on light),
+# so it was legible on the 600s too. Nothing here uses coloured markdown today;
+# the target keeps the first use honest. The
+# rule: light takes the 600 or 700 shade, whichever clears 4.5:1 on white; dark
+# takes the 400 shade. Green, orange and yellow need the 700. They are not the
+# chart palette — `chartCategoricalColors` above keeps its own 600s, which only
+# need 3:1 as fills.
+greenColor = "#047857"               # Emerald 700 — 5.5:1 (600 was 3.8)
 redColor = "#DC2626"
-yellowColor = "#CA8A04"
-orangeColor = "#EA580C"
+yellowColor = "#A16207"              # Yellow 700 — 4.9:1 (600 was 2.9)
+orangeColor = "#C2410C"              # Orange 700 — 5.2:1 (600 was 3.6)
 blueColor = "#2563EB"
 violetColor = "#7C3AED"
 grayColor = "#475569"
@@ -124,14 +137,18 @@ dataframeBorderColor = "#CBD5E1"
 # --- dark ---------------------------------------------------------------------
 
 [theme.dark]
-primaryColor = "#60A5FA"             # Blue 400 — the light half's hue, lifted for dark
+# The same Blue 600 as light, not a lifted 400: Streamlit draws primary-button
+# text in white in both modes, and white on Blue 400 is 2.5:1. Blue 600 gives
+# 5.2:1 for the label and 3.5:1 against the slate background. `linkColor` stays
+# at 400, because it is drawn as text on the background, not behind white.
+primaryColor = "#2563EB"             # Blue 600
 backgroundColor = "#0F172A"          # Slate 900
 secondaryBackgroundColor = "#1E293B" # Slate 800
 codeBackgroundColor = "#1E293B"
 textColor = "#F1F5F9"
 codeTextColor = "#CBD5E1"
-linkColor = "#60A5FA"
-borderColor = "#334155"              # Slate 700
+linkColor = "#60A5FA"                # Blue 400 — 7.0:1 as text on slate 900
+borderColor = "#334155"              # Slate 700 — 1.72:1, kept by the same decision as light
 
 greenColor = "#34D399"
 redColor = "#F87171"
@@ -150,6 +167,6 @@ secondaryBackgroundColor = "#1E293B"
 codeBackgroundColor = "#1E293B"
 textColor = "#F1F5F9"
 borderColor = "#334155"
-primaryColor = "#60A5FA"
+primaryColor = "#2563EB"
 dataframeHeaderBackgroundColor = "#1E293B"
 dataframeBorderColor = "#334155"

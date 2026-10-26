@@ -2474,6 +2474,67 @@ def test_the_theme_leaves_the_light_dark_switch_working() -> None:
     )
 
 
+def _luminance(hex_colour: str) -> float:
+    """WCAG 2.x relative luminance of a `#RRGGBB` colour."""
+    channels = [int(hex_colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    r, g, b = (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a: str, b: str) -> float:
+    high, low = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def test_both_theme_modes_meet_the_same_contrast_rules() -> None:
+    """Each mode clears the same WCAG targets; neither gets a pass the other is held to.
+
+    Both halves were checked against their own background when written, and both
+    looked fine — but against different rules. Dark lifted `primaryColor` to Blue
+    400 for visibility, and Streamlit draws primary-button text in **white** in
+    every mode, so the send button read at 2.5:1. Light kept the 600 shades for
+    green, orange and yellow, which pass as chart fills and fail as text, and
+    `:green[…]` markdown draws them as raw text. (`st.metric`'s delta does not:
+    on 1.66 it is a tinted badge whose text Streamlit darkens itself — measured
+    in the browser — so it never depended on these.) Nothing in the app raises
+    on a low-contrast colour, so this is the only place it can fail.
+
+    `borderColor` is deliberately **not** asserted (1.48 light, 1.72 dark, under
+    the 3:1 non-text guideline). The outlines group content —
+    `st.container(border=True)` round the metric row and chart panels — and inputs
+    carry labels besides; raising them to 3:1 makes every container heavy. That
+    was the user's decision, not an oversight, so don't add the assertion back.
+    """
+    theme = _theme_config()["theme"]
+    palette = theme["chartCategoricalColors"]
+    semantic = ("green", "red", "yellow", "orange", "blue", "violet", "gray")
+
+    failures = []
+    for mode in ("light", "dark"):
+        colours = theme[mode]
+        sidebar = colours["sidebar"]
+        background = colours["backgroundColor"]
+        checks = [
+            ("textColor on backgroundColor", colours["textColor"], background, 4.5),
+            ("textColor on secondaryBackgroundColor", colours["textColor"], colours["secondaryBackgroundColor"], 4.5),
+            ("sidebar textColor on sidebar backgroundColor", sidebar["textColor"], sidebar["backgroundColor"], 4.5),
+            ("linkColor on backgroundColor", colours["linkColor"], background, 4.5),
+        ]
+        for where, primary, behind in (("", colours, background), ("sidebar ", sidebar, sidebar["backgroundColor"])):
+            checks += [
+                (f"white button text on {where}primaryColor", "#FFFFFF", primary["primaryColor"], 4.5),
+                (f"{where}primaryColor on its background", primary["primaryColor"], behind, 3),
+            ]
+        checks += [(f"{name}Color on backgroundColor", colours[f"{name}Color"], background, 4.5) for name in semantic]
+        checks += [(f"chart colour {hex_} on backgroundColor", hex_, background, 3) for hex_ in palette]
+
+        for what, fore, back, target in checks:
+            if (ratio := _contrast(fore, back)) < target:
+                failures.append(f"[{mode}] {what}: {fore} on {back} is {ratio:.2f}, needs {target}")
+
+    assert not failures, "contrast below target:\n" + "\n".join(failures)
+
+
 # --- toolchain configuration ----------------------------------------------
 #
 # "N tests, ty clean, ruff clean" is only a gate if "clean" cannot quietly
