@@ -1,6 +1,6 @@
 [project]
 name = "real-estate-agent"
-version = "0.5.1"
+version = "0.5.2"
 description = "Real estate agent on Deep Agents"
 readme = "README.md"
 license = "MIT"
