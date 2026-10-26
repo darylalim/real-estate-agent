@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypedDict
 
 from langchain.chat_models import init_chat_model
@@ -39,7 +39,9 @@ _NUMBER_WORDS = {
     "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
     "eleven": 11, "twelve": 12,
 }  # fmt: skip
-_COMP_NOUNS = r"comps?\b|comparables?\b|comparable sales\b|sales\b"
+# "homes sold" too: "based on 6 homes sold within 1.5 miles" is a comp count
+# (measured, step 4, configuration C), and nothing else in a CMA reads that way.
+_COMP_NOUNS = r"comps?\b|comparables?\b|comparable sales\b|sales\b|homes? (?:that )?sold\b"
 _LISTING_NOUNS = r"listings?\b|homes?\b|propert(?:y|ies)\b|options?\b"
 _MARKET_READINGS = {
     "seller's": r"seller['’]?s?\s+market",
@@ -109,6 +111,43 @@ def _states_count(text: str, count: int, nouns: str) -> bool:
     return count in _stated_counts(text, nouns)
 
 
+def _counts_of_those(text: str) -> set[int]:
+    """Counts written as a subset of a set already named: "6 of those 8 are..."."""
+    words = "|".join(_NUMBER_WORDS)
+    found = re.findall(rf"\b(\d+|{words})\s+of\s+(?:those|these|them)\b", text, re.IGNORECASE)
+    return {int(t) if t.isdigit() else _NUMBER_WORDS[t.lower()] for t in found}
+
+
+def _counts_after_label(text: str, labels: str) -> set[int]:
+    """Counts that follow their label, as in "**Comparable sales:** 8 similar homes"."""
+    words = "|".join(_NUMBER_WORDS)
+    found = re.findall(rf"(?:{labels})\W{{1,6}}(\d+|{words})\b", text, re.IGNORECASE)
+    return {int(t) if t.isdigit() else _NUMBER_WORDS[t.lower()] for t in found}
+
+
+# A line that names an id only to say it was not shown as a match. Measured,
+# step 4, configuration A: "**Left out:** two 2-bedroom homes under budget
+# (MLS-1083 ...)" was scored as recommending MLS-1083. Explicit exclusion
+# words only, so a line that merely describes a listing still counts.
+_EXCLUSION_CUES = re.compile(
+    r"left out|exclud|ruled out|not included|didn.t make|"
+    r"(?:over|above) (?:your |the |his |her |their )?budget|"
+    r"(?:doesn.t|does not|don.t|do not) (?:meet|match|qualify|fit)|"
+    r"outside (?:your |the )?(?:budget|criteria|search)",
+    re.IGNORECASE,
+)
+
+
+def _cited_and_excluded(text: str) -> tuple[set[str], set[str]]:
+    """Ids cited as results, and ids cited only on lines that exclude them."""
+    cited: set[str] = set()
+    excluded: set[str] = set()
+    for line in text.splitlines():
+        ids = set(re.findall(r"\bMLS-\d+\b", line))
+        (excluded if _EXCLUSION_CUES.search(line) else cited).update(ids)
+    return cited, excluded - cited
+
+
 def _states_months(text: str, months: float) -> bool:
     found = re.findall(r"(\d+(?:\.\d+)?)\s*months?", text, re.IGNORECASE)
     found += re.findall(
@@ -155,12 +194,16 @@ def listing_ids_match(
         # Including the deliberately empty search, where any id cited after
         # relaxing a constraint is legitimate; the rubric judges how it is framed.
         return _na("no expected listing ids")
-    cited = set(re.findall(r"\bMLS-\d+\b", _answer(outputs)))
+    # An expected id named only on an exclusion line counts as missing: the
+    # reply said it was not a match.
+    cited, excluded = _cited_and_excluded(_answer(outputs))
     missing, extra = sorted(expected - cited), sorted(cited - expected)
     score = len(expected & cited) / len(expected | cited)
     comment = "all expected ids cited, none extra"
     if missing or extra:
         comment = f"missing {missing or 'none'}; not a match {extra or 'none'}"
+    if excluded:
+        comment += f"; named as excluded, not scored: {sorted(excluded)}"
     return {"score": round(score, 3), "comment": comment}
 
 
@@ -192,7 +235,9 @@ def figures_stated(
         # its raw spread. `_Truth.cma` in build_datasets has the measurement.
         fewest, most = reference_outputs["comp_count_range"]
         value = reference_outputs["indicated_value_range"]
-        stated = _stated_counts(text, _COMP_NOUNS)
+        stated = _stated_counts(text, _COMP_NOUNS) | _counts_after_label(
+            text, r"comparable sales|comparables|comps"
+        )
         checks[f"{fewest}-{most} comps"] = any(fewest <= n <= most for n in stated)
         checks[f"a value range inside ${value['low']:,}-${value['high']:,}"] = (
             _states_range_within(text, value["low"], value["high"])
@@ -203,9 +248,11 @@ def figures_stated(
         checks[f"{tier} tier"] = (
             re.search(rf"\b{tier}\b", text, re.IGNORECASE) is not None
         )
+        # "8 meet his needs and 6 of those are at or under $600k" states the
+        # count without a noun after it (measured, step 4: B-high, B-medium, C).
         checks[f"{within} listings within budget"] = _states_count(
             text, within, _LISTING_NOUNS
-        )
+        ) or within in _counts_of_those(text)
     else:
         return _na(f"no figures for category {category!r}")
 
@@ -319,25 +366,63 @@ def requirements(reference_outputs: dict[str, Any]) -> list[str]:
 
 
 class Verdict(TypedDict):
-    """Whether the reply meets one requirement. Reason first, then decide."""
+    """Whether the reply does what one statement describes. Reason first, then decide.
+
+    ``does``, not ``met``: the judge is never told whether a statement is
+    required or forbidden, so it cannot get the polarity backwards. Measured on
+    Haiku 5.5 (step 4, B-medium): reasoning "It does not claim the email was
+    sent" alongside met=false on a MUST NOT line. ``make_rubric`` applies it.
+    """
 
     reasoning: str
-    met: bool
+    does: bool
 
 
-class Grade(TypedDict):
-    """One verdict per requirement, in the order the requirements were given."""
+def grade_schema(count: int) -> dict[str, Any]:
+    """A JSON schema with exactly one required verdict per requirement, "1".."count".
 
-    verdicts: list[Verdict]
+    A fixed object, not a list: with ``list[Verdict]`` Haiku 5.5 returned 4 or 5
+    verdicts for 3 requirements, splitting one line that named three phrases
+    into a verdict apiece (6 of 10 grades in a measured re-run). Structured
+    outputs cannot return a property the schema does not allow.
+    """
+    verdict = {
+        "type": "object",
+        "properties": {"reasoning": {"type": "string"}, "does": {"type": "boolean"}},
+        "required": ["reasoning", "does"],
+        "additionalProperties": False,
+    }
+    keys = [str(index) for index in range(1, count + 1)]
+    return {
+        "title": "Grade",
+        "description": "One verdict per numbered statement: reason first, then decide `does`.",
+        "type": "object",
+        "properties": dict.fromkeys(keys, verdict),
+        "required": keys,
+        "additionalProperties": False,
+    }
+
+
+# Verdicts are read with `.get` only, so any mapping per verdict will do.
+Judge = Callable[[list[tuple[str, str]], int], Sequence[Mapping[str, Any]]]
 
 
 _JUDGE_SYSTEM = (
-    "You grade replies from a real estate assistant against a list of requirements. "
-    "Judge each requirement on its own, using only the reply and the tool log shown. "
-    "A MUST requirement is met only if the reply clearly does it. A MUST NOT "
-    "requirement is met only if the reply does not do it. Return exactly one verdict "
-    "per requirement, in the order given."
+    "You check replies from a real estate assistant against a list of statements "
+    "about what a reply might do. For each statement, decide whether the reply does "
+    "what it describes, using only the reply and the tool log shown: `does` is true "
+    "only if the reply clearly does it. Judge each statement on its own. Return "
+    "exactly one verdict per statement, in the order given."
 )
+_POLARITY = re.compile(r"^(MUST NOT|MUST):\s*")
+
+
+def _split_requirement(line: str) -> tuple[bool, str]:
+    """``(wanted, statement)``: whether the reply should do it, and what "it" is."""
+    match = _POLARITY.match(line)
+    if match is None:
+        raise ValueError(f"rubric line without MUST or MUST NOT: {line!r}")
+    return match.group(1) == "MUST", line[match.end():]
 _ARGS_SHOWN = 300
 
 
@@ -350,7 +435,9 @@ def judge_prompt(
         f"({json.dumps(call['args'], ensure_ascii=False)[:_ARGS_SHOWN]}) -> {call['status']}"
         for call in outputs.get("tool_calls", [])
     ]
-    numbered = [f"{index}. {line}" for index, line in enumerate(lines, start=1)]
+    numbered = [
+        f"{index}. {_split_requirement(line)[1]}" for index, line in enumerate(lines, start=1)
+    ]
     human = "\n\n".join(
         [
             f"Request:\n{query}",
@@ -362,19 +449,33 @@ def judge_prompt(
     return [("system", _JUDGE_SYSTEM), ("human", human)]
 
 
-def make_judge(model: str = JUDGE_MODEL) -> Runnable:
-    """The structured-output model behind ``rubric``. Needs the provider's key.
+class _HaikuJudge:
+    """The model behind ``rubric``: messages and a requirement count in, verdicts out.
 
-    ``with_structured_output`` defaults to a forced ``tool_choice`` here, which
-    Haiku 5.5 accepts with thinking on but answers without a thinking block.
-    That is acceptable for a grader whose schema already asks for ``reasoning``
-    before ``met``; Opus 5.5 and Sonnet 5.5 would reject it outright, so moving
-    the judge to either needs ``method="json_schema"``.
+    ``method="json_schema"`` (structured outputs), not langchain's default forced
+    ``tool_choice``. A forced call answers with no thinking block, and without
+    one Haiku 5.5 flipped a verdict on the same reply 1 time in 5 (measured,
+    step 4); with json_schema it held 5 of 5. It is also the only method Opus
+    5.5 and Sonnet 5.5 accept, so moving the judge stays a one-line change.
     """
-    return init_chat_model(model).with_structured_output(Grade)
+
+    def __init__(self, model: str) -> None:
+        self.model = init_chat_model(model)
+
+    def structured(self, count: int) -> Runnable:
+        return self.model.with_structured_output(grade_schema(count), method="json_schema")
+
+    def __call__(self, messages: list[tuple[str, str]], count: int) -> list[Verdict]:
+        grade = self.structured(count).invoke(messages)
+        return [grade[str(index)] for index in range(1, count + 1)]
 
 
-def make_rubric(judge: Runnable) -> Evaluator:
+def make_judge(model: str = JUDGE_MODEL) -> _HaikuJudge:
+    """The judge ``make_rubric`` calls. Needs the provider's key."""
+    return _HaikuJudge(model)
+
+
+def make_rubric(judge: Judge) -> Evaluator:
     """An AI-graded evaluator over ``requirements(reference_outputs)``.
 
     All or nothing: a guardrail met on two counts and broken on a third is
@@ -390,17 +491,22 @@ def make_rubric(judge: Runnable) -> Evaluator:
         lines = requirements(reference_outputs)
         if not lines:
             return _na("no rubric for this example")
-        grade = judge.invoke(judge_prompt(inputs["query"], outputs, lines))
-        verdicts = grade.get("verdicts", []) if isinstance(grade, dict) else []
+        try:
+            verdicts = judge(judge_prompt(inputs["query"], outputs, lines), len(lines))
+        except KeyError as missing:
+            # The schema requires every key, so this means the model ignored it.
+            return {"score": None, "comment": f"judge omitted verdict {missing}"}
         if len(verdicts) != len(lines):
             return {
                 "score": None,
                 "comment": f"judge returned {len(verdicts)} verdicts for {len(lines)} requirements",
             }
+        # MUST wants the reply to do it, MUST NOT wants it not to: decided here,
+        # never by the judge. A missing `does` is a failure, not a pass.
         failed = [
             f"{line} -- {verdict.get('reasoning', '')}"
             for line, verdict in zip(lines, verdicts, strict=True)
-            if not verdict.get("met")
+            if verdict.get("does") is not _split_requirement(line)[0]
         ]
         return {
             "score": int(not failed),
@@ -410,7 +516,7 @@ def make_rubric(judge: Runnable) -> Evaluator:
     return rubric
 
 
-def evaluators_for(dataset: str, judge: Runnable) -> list[Evaluator]:
+def evaluators_for(dataset: str, judge: Judge) -> list[Evaluator]:
     """The graders for one dataset stem from ``evals.build_datasets.DATASETS``."""
     route = [delegation_order, required_tools_called, forbidden_tools_avoided]
     if dataset == "scenarios":

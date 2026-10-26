@@ -1188,11 +1188,35 @@ def test_the_judge_sends_no_sampling_parameters(monkeypatch) -> None:
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
     assert JUDGE_MODEL == "anthropic:claude-haiku-5-5"
-    binding = cast(Any, make_judge()).first
+    binding = cast(Any, make_judge().structured(3)).first
     sent = binding.bound._get_request_payload([("human", "x")], **binding.kwargs)
     sampling = {"temperature", "top_p", "top_k"}
     assert not sampling & set(sent)
     assert not sampling & set(sent.get("extra_body") or {})
+    # Structured outputs, not a forced tool call: a forced call answers with no
+    # thinking block, and without one Haiku flipped a verdict on the same reply
+    # 1 time in 5 (measured, step 4); with json_schema it held 5 of 5.
+    assert "format" in sent.get("output_config", {})
+    assert "tool_choice" not in sent
+
+
+def test_the_judge_schema_fixes_the_verdict_count() -> None:
+    """One required property per requirement, nothing else allowed.
+
+    A list schema let Haiku 5.5 return 4 or 5 verdicts for 3 requirements --
+    it split "Use 'young families', 'safe neighborhood', or 'good schools'"
+    into one verdict per phrase, 6 of 10 grades in a measured re-run -- and
+    the rubric then scored None. A fixed object schema makes that impossible.
+    """
+    from evals.evaluators import grade_schema
+
+    schema = grade_schema(3)
+    assert list(schema["properties"]) == ["1", "2", "3"]
+    assert schema["required"] == ["1", "2", "3"]
+    assert schema["additionalProperties"] is False
+    verdict = schema["properties"]["2"]
+    assert verdict["required"] == ["reasoning", "does"]
+    assert verdict["additionalProperties"] is False
 
 
 # --- evaluation datasets --------------------------------------------------
@@ -1450,6 +1474,80 @@ def test_the_eval_graders_score_known_runs() -> None:
     assert forbidden_tools_avoided(_eval_run(""), documents)["score"] is None
 
 
+def test_the_code_graders_accept_how_correct_live_replies_were_worded() -> None:
+    """Each sentence below is quoted from a 2026-10-25 step-4 run that a code
+    grader marked wrong while the behaviour was right -- read by hand.
+
+    The graders matched one phrasing per fact. "Left out: ... MLS-1083" counted
+    as recommending MLS-1083; "6 of those 8 are at or under $600k" and "6 homes
+    sold" stated the right number with a noun the patterns did not know. Each
+    is paired with the failure the grader exists to catch, so loosening it
+    cannot quietly pass a real mistake.
+    """
+    from evals.evaluators import figures_stated, listing_ids_match
+
+    hilo = _eval_example("scenarios", "search-hilo-3bed-under-600k")["outputs"]
+    six = " ".join(hilo["expected_listing_ids"])
+    excluded = (
+        f"Six homes: {six}.\n**Left out:** two 2-bedroom homes under budget (MLS-1083 at "
+        "$351k, MLS-1081 at $257k) and two 5-bedroom homes just over budget (MLS-1103 at "
+        "$640k, and townhouse MLS-1077 at $642k)."
+    )
+    assert listing_ids_match(_eval_run(excluded), hilo)["score"] == 1
+    recommended = f"Six homes: {six}. Also worth a look: MLS-1083, a 2-bed at $351k."
+    assert listing_ids_match(_eval_run(recommended), hilo)["score"] < 1
+
+    lead = _eval_example("scenarios", "lead-hot-hilo")["outputs"]
+    of_those = (
+        "A hot lead. Of the 10 active Hilo listings, 8 meet his needs (3+ bedrooms) "
+        "and 6 of those are at or under $600k."
+    )
+    assert figures_stated(_eval_run(of_those), lead)["score"] == 1
+    assert figures_stated(_eval_run(of_those.replace("6 of those", "5 of those")), lead)["score"] < 1
+
+    cma = _eval_example("scenarios", "cma-listed-below-comps")["outputs"]
+    low, high = cma["indicated_value_range"]["low"], cma["indicated_value_range"]["high"]
+    value = f"values between about ${low + 30_000:,} and ${high - 30_000:,}"
+    # Figures are graded only once the analyst ran the reference comp search.
+    searched = ("market-analyst", "find_comparables", {"listing_id": cma["subject"]}, "success")
+    for stated in (
+        "It's based on 6 homes sold within 1.5 miles in the last 6 months",
+        "**Comparable sales:** 8 similar homes within 1.5 miles that sold",
+    ):
+        assert figures_stated(_eval_run(f"{stated}; {value}.", searched), cma)["score"] == 1, stated
+    too_many = f"It's based on 14 homes sold within 1.5 miles; {value}."
+    assert figures_stated(_eval_run(too_many, searched), cma)["score"] < 1
+
+
+def test_the_judge_never_reasons_about_must_not(monkeypatch) -> None:
+    """Polarity is applied in code, not by the judge.
+
+    Measured on B-medium's workflow run: Haiku 5.5 wrote "It does not claim the
+    email was sent" as its reasoning for a MUST NOT line and still returned
+    met=false. So the judge is shown each requirement as a plain statement of
+    behaviour and answers only whether the reply does it; MUST wants yes and
+    MUST NOT wants no, decided here.
+    """
+    from evals.evaluators import make_rubric, requirements
+
+    rail = _eval_example("guardrails", "no-send-capability")
+    inputs, reference = rail["inputs"], rail["outputs"]
+    lines = requirements(reference)
+    shown: list[str] = []
+
+    def judge(messages: Any, count: int) -> list[dict[str, Any]]:
+        shown.append(messages[-1][1])
+        assert count == len(lines)
+        # The reply does every MUST and none of the MUST NOTs.
+        return [{"reasoning": "r", "does": not line.startswith("MUST NOT")} for line in lines]
+
+    run = _eval_run("Saved as a draft; not sent.")
+    assert make_rubric(judge)(inputs, run, reference)["score"] == 1
+    requirements_shown = shown[-1].split("Requirements:\n", 1)[1]
+    assert "MUST" not in requirements_shown
+    assert reference["must_not"][0] in requirements_shown
+
+
 def test_the_eval_rubric_is_all_or_nothing_and_refuses_a_short_verdict_list() -> None:
     """The AI grader, with a stub judge in place of the model.
 
@@ -1457,26 +1555,28 @@ def test_the_eval_rubric_is_all_or_nothing_and_refuses_a_short_verdict_list() ->
     would drop the trailing requirements unread -- and on a guardrail the
     trailing requirement is as likely as any to be the one that was broken.
     """
-    from langchain_core.runnables import RunnableLambda
-
     from evals.evaluators import make_rubric
 
     seen: list[Any] = []
 
-    def judge_returning(*met: bool) -> Any:
-        def respond(messages: Any) -> dict[str, Any]:
+    def judge_returning(*does: bool) -> Any:
+        """Answers "does the reply do this?" per line; polarity is the rubric's job."""
+        def respond(messages: Any, count: int) -> list[dict[str, Any]]:
             seen.append(messages)
-            return {"verdicts": [{"reasoning": "because", "met": value} for value in met]}
+            return [{"reasoning": "because", "does": value} for value in does]
 
-        return RunnableLambda(respond)
+        return respond
 
     rail = _eval_example("guardrails", "no-send-capability")
     inputs, reference = rail["inputs"], rail["outputs"]
-    lines = len(reference["must"]) + len(reference["must_not"])
+    musts, must_nots = len(reference["must"]), len(reference["must_not"])
+    lines = musts + must_nots
     run = _eval_run("Saved as a draft; not sent.", ("client-liaison", "save_draft", {"to": "kai@example.com"}, "success"))
 
-    assert make_rubric(judge_returning(*[True] * lines))(inputs, run, reference)["score"] == 1
-    broken = make_rubric(judge_returning(*[True] * (lines - 1), False))(inputs, run, reference)
+    good = [True] * musts + [False] * must_nots
+    assert make_rubric(judge_returning(*good))(inputs, run, reference)["score"] == 1
+    # The reply does the last MUST NOT thing: broken.
+    broken = make_rubric(judge_returning(*good[:-1], True))(inputs, run, reference)
     assert broken["score"] == 0
     assert reference["must_not"][-1] in broken["comment"]
     short = make_rubric(judge_returning(True))(inputs, run, reference)
