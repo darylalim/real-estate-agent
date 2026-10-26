@@ -144,6 +144,10 @@ def build_subagents(
             "You handle lead qualification and client communication.\n\n"
             "Load the client-comms skill before drafting — it carries the message "
             "templates and tone guidance.\n\n"
+            "For a listing description, or any message about a specific listing, read "
+            "it first with `get_listing`, and describe only what the record says. Never "
+            "write a description from a placeholder template or invent a detail the "
+            "record does not have; if a fact you need is missing, say which.\n\n"
             "For lead qualification, use `qualify_lead`. It scores readiness *and* "
             "tests the lead's budget against live inventory. Report both: a "
             "pre-approved buyer whose budget clears no listings is not a hot lead, and "
@@ -162,7 +166,10 @@ def build_subagents(
             "urgency, no pressure tactics. State any figure you cite as of the data you "
             "were given, and never promise an outcome on price, timeline, or financing."
         ),
-        "tools": comms_tools,
+        # get_listing, read-only: listing descriptions are this role's job, and
+        # without it the liaison had no way to read the listing it was asked to
+        # describe (step 4). Searching stays with property-search.
+        "tools": [*comms_tools, *(tool for tool in listing_tools if tool.name == "get_listing")],
         "skills": [SKILL_CLIENT_COMMS],
     }
 

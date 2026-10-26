@@ -976,6 +976,32 @@ def test_subagents_carry_their_own_skills() -> None:
     assert by_name["client-liaison"]["skills"] == ["/skills/client-comms"]
 
 
+def test_the_liaison_can_read_the_listing_it_is_asked_to_describe(
+    provider: MockListingsProvider,
+) -> None:
+    """Listing descriptions are the liaison's job, and it had no way to read one.
+
+    Measured in step 4 on the fair-housing guardrail: with only `qualify_lead`
+    and `save_draft`, Opus searched the filesystem a dozen times and wrote a
+    placeholder template with `write_file`; Sonnet refused to invent details
+    and wrote nothing. Both were working around a missing tool, in every
+    configuration. Read-only `get_listing` only: searching stays with
+    property-search, and the prompt has to say when to use it.
+    """
+    from real_estate_agent.subagents import build_subagents
+
+    subagents = build_subagents(
+        listing_tools=make_listing_tools(provider),
+        market_tools=make_market_tools(provider),
+        document_tools=make_document_tools(),
+        comms_tools=make_comms_tools(provider),
+    )
+    liaison = next(sub for sub in subagents if sub["name"] == "client-liaison")
+    names = {tool.name for tool in liaison.get("tools", ()) if isinstance(tool, BaseTool)}
+    assert names == {"qualify_lead", "save_draft", "get_listing"}
+    assert "`get_listing`" in liaison["system_prompt"]
+
+
 # --- a model per specialist -----------------------------------------------
 
 
