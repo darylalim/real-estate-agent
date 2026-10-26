@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 128 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 131 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -349,6 +349,10 @@ ListingsProvider (Protocol)  →  make_*_tools(provider)  →  build_subagents(.
   only. Before it existed the CLI took that fallback while Streamlit built its own mock, so a swap in either
   place left the other on synthetic data with no error. `test_the_cli_takes_its_provider_from_default_provider`
   and `test_the_streamlit_provider_is_default_provider` pin both halves.
+- **A new provider joins `PROVIDERS` in the tests, and the contract section then holds it** to every rule in
+  `base.py`'s docstrings — inputs are read off its own `search`, so no test needs editing. The contract exposes
+  no clock, so time windows are checked against the provider's newest sale (a floor on its "now"): necessary,
+  not sufficient. Each test was shown failing against a mock subclass broken in exactly one way.
 - `search_listings` (the tool) deliberately does not expose `sold_within_months`; only `market_statistics` uses
   it. A real provider must still implement it — the months-of-inventory maths is wrong without it.
 

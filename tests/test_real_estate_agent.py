@@ -15,7 +15,9 @@ import json
 import os
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -27,8 +29,8 @@ from langsmith.utils import tracing_is_enabled
 
 from real_estate_agent.config import PROJECT_ROOT, SKILLS_DIR
 from real_estate_agent.providers import MockListingsProvider
-from real_estate_agent.providers.base import Listing
-from real_estate_agent.providers.mock import PROPERTY_TYPES, _pool
+from real_estate_agent.providers.base import Listing, ListingsProvider
+from real_estate_agent.providers.mock import PROPERTY_TYPES, _miles_between, _pool
 from real_estate_agent.tools import comms, documents
 from real_estate_agent.tools.comms import make_comms_tools
 from real_estate_agent.tools.documents import make_document_tools
@@ -58,7 +60,7 @@ def comms_tools(tmp_path, monkeypatch) -> dict[str, BaseTool]:
     return {tool.name: tool for tool in comms.make_comms_tools(MockListingsProvider())}
 
 
-def _subject_with_comps(provider: MockListingsProvider, minimum: int = 3):
+def _subject_with_comps(provider: ListingsProvider, minimum: int = 3) -> Listing:
     """A subject that has a usable comp set.
 
     Picking "the first active listing" couples the test to sort order and to
@@ -153,18 +155,6 @@ def test_no_listing_carries_an_unadvertised_property_type(
         _pool(single_famliy=3)
 
 
-def test_search_respects_filters(provider: MockListingsProvider) -> None:
-    results = provider.search(
-        city="Hilo", max_price=600_000, min_beds=3, status="active"
-    )
-    assert results
-    for listing in results:
-        assert listing.city == "Hilo"
-        assert listing.price <= 600_000
-        assert listing.beds >= 3
-        assert listing.status == "active"
-
-
 def test_expensive_market_can_return_nothing(provider: MockListingsProvider) -> None:
     """The two markets are priced apart on purpose.
 
@@ -182,10 +172,6 @@ def test_expensive_market_can_return_nothing(provider: MockListingsProvider) -> 
     assert provider.search(city="Hilo", max_price=550_000, min_beds=3)
 
 
-def test_unknown_listing_returns_none(provider: MockListingsProvider) -> None:
-    assert provider.get("MLS-does-not-exist") is None
-
-
 def test_price_per_sqft_names_the_price_it_divides(provider: MockListingsProvider) -> None:
     """The label must be true, not merely present.
 
@@ -198,17 +184,6 @@ def test_price_per_sqft_names_the_price_it_divides(provider: MockListingsProvide
         record = provider.search(status=status, limit=1)[0].as_dict()
         assert record["price_per_sqft_basis"] == basis
         assert record["price_per_sqft"] == round(record[basis] / record["sqft"], 2)
-
-
-def test_comparables_are_sold_and_exclude_subject(provider: MockListingsProvider) -> None:
-    """A CMA on active listings or on the subject itself would be wrong."""
-    subject = _subject_with_comps(provider)
-    comps = provider.comparables(subject.listing_id, radius_miles=1.5, months_back=6)
-    assert comps, "expected comps at the documented default radius"
-    for comp in comps:
-        assert comp.status == "sold"
-        assert comp.sold_price is not None
-        assert comp.listing_id != subject.listing_id
 
 
 def test_most_listings_have_a_usable_comp_set(provider: MockListingsProvider) -> None:
@@ -224,25 +199,199 @@ def test_most_listings_have_a_usable_comp_set(provider: MockListingsProvider) ->
     assert with_min_comps / len(active) >= 0.6
 
 
-# --- market tools ---------------------------------------------------------
+# --- provider contract ----------------------------------------------------
+#
+# The rules in `providers/base.py`'s docstrings, checked against every provider
+# in `PROVIDERS` rather than as side effects of mock-specific tests. Nothing
+# here may hardcode an id, a city or a count: inputs are read off the
+# provider's own first `search`, so a real feed added to the list is held to
+# the same rules without editing a test. Mock-specific facts (the two markets,
+# the comp-share floor, the screening buckets) stay in the sections around this.
+
+PROVIDERS: list[tuple[str, Callable[[], ListingsProvider]]] = [
+    ("mock", MockListingsProvider),
+]
+
+# A window "within N months" read with a month's slack, since providers count a
+# month differently (the mock uses 30.44 days) and the contract does not say.
+_DAYS_PER_MONTH_CEILING = 31
 
 
-def test_comparables_enforce_the_size_screen(provider: MockListingsProvider) -> None:
+@pytest.fixture(params=[factory for _name, factory in PROVIDERS], ids=[n for n, _f in PROVIDERS])
+def any_provider(request: pytest.FixtureRequest) -> ListingsProvider:
+    return request.param()
+
+
+def _everything(provider: ListingsProvider) -> list[Listing]:
+    return list(provider.search(status=None, limit=10_000))
+
+
+def _latest_sale(provider: ListingsProvider) -> date:
+    """The newest close date the provider holds -- a floor on its own "now".
+
+    The contract leaves "now" to the provider and exposes no clock, so a window
+    is checked against this instead: everything inside "the last N months" must
+    lie within N months of the newest sale, because that sale is no later than
+    now. Necessary rather than sufficient, and true of any honest provider.
+    """
+    return max(date.fromisoformat(x.sold_date) for x in _everything(provider) if x.sold_date)
+
+
+def test_search_defaults_to_active_and_none_means_any_status(
+    any_provider: ListingsProvider,
+) -> None:
+    default = any_provider.search(limit=10_000)
+    assert default and {x.status for x in default} == {"active"}
+    statuses = {x.status for x in _everything(any_provider)}
+    assert {"active", "sold"} <= statuses, "a provider with no sales cannot back a CMA"
+
+
+def test_search_respects_every_filter_and_the_limit(any_provider: ListingsProvider) -> None:
+    """Filters built from a real listing must keep it and keep only its like.
+
+    Asserting both halves matters: a filter that drops everything satisfies
+    "every result matches" vacuously.
+    """
+    target = min(_everything(any_provider), key=lambda x: x.listing_id)
+    results = any_provider.search(
+        city=target.city,
+        state=target.state,
+        min_price=target.price,
+        max_price=target.price,
+        min_beds=target.beds,
+        min_baths=target.baths,
+        property_type=target.property_type,
+        status=target.status,
+        limit=10_000,
+    )
+    assert target.listing_id in {x.listing_id for x in results}
+    for x in results:
+        assert (x.city, x.state) == (target.city, target.state)
+        assert x.price == target.price
+        assert x.beds >= target.beds and x.baths >= target.baths
+        assert (x.property_type, x.status) == (target.property_type, target.status)
+
+    assert len(any_provider.search(status=None, limit=2)) == 2
+
+
+def test_search_matches_status_and_type_case_insensitively(
+    any_provider: ListingsProvider,
+) -> None:
+    """Regression: "Active" returned zero, which reads to the agent as an empty market."""
+    target = any_provider.search(limit=1)[0]
+
+    def ids(status: str = "active", property_type: str | None = None) -> set[str]:
+        found = any_provider.search(status=status, property_type=property_type, limit=10_000)
+        return {x.listing_id for x in found}
+
+    assert ids(status="ACTIVE") == ids(status="active")
+    lower = ids(property_type=target.property_type.lower())
+    assert lower and lower == ids(property_type=target.property_type.upper())
+
+
+def test_sold_within_months_keeps_only_dated_sales_inside_the_window(
+    any_provider: ListingsProvider,
+) -> None:
+    latest = _latest_sale(any_provider)
+    sold = [x for x in _everything(any_provider) if x.status == "sold"]
+    previous: set[str] = set()
+    for months in (3, 6, 12):
+        recent = any_provider.search(status=None, sold_within_months=months, limit=10_000)
+        assert recent, f"no sales in {months} months"
+        for x in recent:
+            assert x.sold_date is not None, f"{x.listing_id} has no close date"
+            age = (latest - date.fromisoformat(x.sold_date)).days
+            assert age <= months * _DAYS_PER_MONTH_CEILING, f"{x.listing_id} is {age} days old"
+        ids = {x.listing_id for x in recent}
+        assert previous <= ids, "a wider window lost a sale a narrower one kept"
+        if months == 3:
+            # Only the narrowest window is asked to filter: a feed holding just
+            # a year of sales (the mock does) rightly returns all of them at 12.
+            assert len(ids) < len(sold), "a 3-month window filtered nothing"
+        previous = ids
+
+
+def test_get_returns_what_search_returned(any_provider: ListingsProvider) -> None:
+    for listing in any_provider.search(status=None, limit=5):
+        assert any_provider.get(listing.listing_id) == listing
+    assert any_provider.get("no-such-listing-id") is None
+
+
+def test_comparables_are_recent_nearby_sales_other_than_the_subject(
+    any_provider: ListingsProvider,
+) -> None:
+    """A CMA on active listings, stale sales or the subject itself would be wrong."""
+    subject = _subject_with_comps(any_provider)
+    latest = _latest_sale(any_provider)
+    for radius, months in ((1.5, 6), (0.75, 3)):
+        for comp in any_provider.comparables(
+            subject.listing_id, radius_miles=radius, months_back=months
+        ):
+            assert comp.listing_id != subject.listing_id
+            assert comp.status == "sold" and comp.sold_price is not None
+            assert comp.sold_date is not None
+            age = (latest - date.fromisoformat(comp.sold_date)).days
+            assert age <= months * _DAYS_PER_MONTH_CEILING
+            distance = _miles_between(
+                subject.latitude, subject.longitude, comp.latitude, comp.longitude
+            )
+            assert distance <= radius + 0.01, f"{comp.listing_id} is {distance:.2f} mi out"
+    assert len(any_provider.comparables(subject.listing_id, limit=2)) <= 2
+    assert not any_provider.comparables("no-such-listing-id")
+
+
+def test_comparables_honour_the_size_and_type_screens(any_provider: ListingsProvider) -> None:
     """Regression: the live ladder returned comps 61-175% larger than subject.
 
     The CMA skill discards anything outside +/-20%, so handing those back only
-    burned tokens on adjustments that were thrown away.
+    burned tokens on adjustments that were thrown away. Both screens can be
+    turned off, and turning one off must never narrow the set.
     """
-    subject = _subject_with_comps(provider)
-
-    for comp in provider.comparables(subject.listing_id):
+    subject = _subject_with_comps(any_provider)
+    screened = any_provider.comparables(subject.listing_id, limit=1000)
+    for comp in screened:
         delta = abs(comp.sqft - subject.sqft) / subject.sqft
         assert delta <= 0.30, f"{comp.listing_id} is {delta:.0%} off subject size"
+        assert comp.property_type == subject.property_type
 
-    # Disabling the screen must remain possible and must never narrow the set.
-    screened = provider.comparables(subject.listing_id)
-    unscreened = provider.comparables(subject.listing_id, max_sqft_delta_pct=None)
-    assert len(unscreened) >= len(screened)
+    tighter = any_provider.comparables(subject.listing_id, limit=1000, max_sqft_delta_pct=0.05)
+    assert all(abs(c.sqft - subject.sqft) / subject.sqft <= 0.05 for c in tighter)
+
+    ids = {c.listing_id for c in screened}
+    for widened in (
+        any_provider.comparables(subject.listing_id, limit=1000, max_sqft_delta_pct=None),
+        any_provider.comparables(subject.listing_id, limit=1000, same_property_type=False),
+    ):
+        assert ids <= {c.listing_id for c in widened}
+
+
+def test_diagnostic_comparables_match_plain_ones(any_provider: ListingsProvider) -> None:
+    """`find_comparables` prefers the diagnostic path when a provider has one.
+
+    If the two disagreed, the analyst would be handed a different comp set
+    depending only on which optional method a feed happened to implement.
+    """
+    diagnose = getattr(any_provider, "comparables_with_diagnostics", None)
+    if diagnose is None:
+        pytest.skip("provider does not implement DiagnosticListingsProvider")
+    subject = _subject_with_comps(any_provider)
+    variants: list[dict[str, Any]] = [
+        {}, {"max_sqft_delta_pct": None}, {"same_property_type": False}
+    ]
+    for kwargs in variants:
+        found, comps, _rejected = diagnose(subject.listing_id, **kwargs)
+        assert found == subject
+        assert list(comps) == list(any_provider.comparables(subject.listing_id, **kwargs))
+
+
+def test_listings_survive_a_json_round_trip(any_provider: ListingsProvider) -> None:
+    """Every tool returns a JSON string; a field `json.dumps` rejects breaks them all."""
+    for listing in _everything(any_provider):
+        payload = listing.as_dict()
+        assert json.loads(json.dumps(payload)) == payload
+
+
+# --- market tools ---------------------------------------------------------
 
 
 def test_comparables_report_what_was_screened_out(provider: MockListingsProvider) -> None:
@@ -397,16 +546,6 @@ def test_document_extraction_reads_a_pdf_page_by_page(tmp_path, monkeypatch) -> 
     assert (capped["pages_extracted"], capped["truncated"]) == (1, True)
 
 
-def test_search_is_case_insensitive(provider: MockListingsProvider) -> None:
-    """Regression: "Active" returned zero, which reads as an empty market."""
-    assert len(provider.search(city="Honolulu", status="Active")) == len(
-        provider.search(city="Honolulu", status="active")
-    )
-    assert len(provider.search(city="HONOLULU", property_type="Condo")) == len(
-        provider.search(city="honolulu", property_type="condo")
-    )
-
-
 def test_market_statistics_window_filters_the_numerator(
     provider: MockListingsProvider,
 ) -> None:
@@ -421,13 +560,6 @@ def test_market_statistics_window_filters_the_numerator(
     )
     assert short["closed_sales"]["count"] < long["closed_sales"]["count"]
     assert short["market"]["closed_sales_window_months"] == 3
-
-
-def test_sold_within_months_excludes_unsold(provider: MockListingsProvider) -> None:
-    recent = provider.search(status="sold", sold_within_months=3, limit=500)
-    assert recent
-    assert all(listing.sold_date is not None for listing in recent)
-    assert len(recent) < len(provider.search(status="sold", limit=500))
 
 
 def test_lot_size_is_never_negative(provider: MockListingsProvider) -> None:
