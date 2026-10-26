@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 124 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 126 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -398,8 +398,15 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   to bottom on every interaction, so that shape cannot survive; `ui/agent_session.get_agent` holds a
   `sqlite3.connect(..., check_same_thread=False)` under `@st.cache_resource` instead. Same flag
   `from_conn_string` sets internally, same `ensure_workspace()`-before-connect ordering, same reason.
-- **`get_agent` is keyed on `require_approval`.** That flag decides whether the `save_draft` interrupt is in
-  the middleware stack at all, so toggling it has to yield a different graph rather than the cached one.
+- **`get_agent` is keyed on `require_approval` and the model preset.** The flag decides whether the
+  `save_draft` interrupt is in the middleware stack at all, and the preset decides the models, so changing
+  either has to yield a different graph rather than the cached one. The preset is one value with three
+  readers — `get_agent`, `run_config` and `require_api_key` — all resolved through `config.models_for`, so
+  the graph, the trace metadata and the key check cannot disagree about a conversation's models.
+  `test_the_model_picker_renders_before_any_rerun_and_feeds_every_reader` holds the chat page to passing
+  the same expression to all three. Presets are a fixed list in `MODEL_PRESETS`, not free text, and each
+  puts every role on one model, since that is all `build_agent`'s arguments can say. The key check now
+  runs *below* the sidebar, so a missing key leaves the picker on screen.
 - **No Altair.** Its fluent builder (`alt.Chart(...).mark_bar().encode(...)`) is opaque to ty, which reports
   `unresolved-attribute` on `.encode` — and `error-on-warning = true` makes that a failure. `market.py`
   pre-bins prices in plain Python and uses `st.bar_chart`. Reach for a native chart before an ignore comment.

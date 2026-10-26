@@ -28,6 +28,18 @@ from real_estate_agent.config import CHECKPOINT_DB, WORKSPACE_DIR, ensure_worksp
 from ui.elements import lazy_expander, stable_key
 from ui.provider import get_provider
 
+# The chat sidebar's model choices: a fixed list, not free text, so a typo'd
+# model string cannot survive until the first turn. The two configurations step 4
+# measured as worth running (plan log, 2026-10-25). `None` is the configured
+# build -- `.env` if it names models, else the shipped Sonnet/Opus mix -- and
+# comes first because it is the default, so a working `.env` is never overridden
+# by opening the page. A preset puts *every* role on one model, which is all
+# `build_agent`'s arguments can say; there is no per-role preset by design.
+MODEL_PRESETS: dict[str, str | None] = {
+    "As configured": None,
+    "All Opus 5.5": "anthropic:claude-opus-5-5",
+}
+
 # Tool payloads are JSON aimed at a model, not a reader. Show enough to tell
 # what came back, then stop.
 _TOOL_RESULT_PREVIEW = 4000
@@ -44,12 +56,19 @@ _PREVIEW_MAX_BYTES = 200_000
 
 
 @st.cache_resource(show_spinner="Starting the agent…")
-def get_agent(require_approval: bool) -> Any:
+def get_agent(require_approval: bool, model: str | None) -> Any:
     """Build the orchestrator, cached for the server's lifetime.
 
     Keyed on ``require_approval`` because that flag decides whether the
     ``save_draft`` interrupt is wired into the middleware stack at all --
-    toggling it has to produce a different graph, not the cached one.
+    toggling it has to produce a different graph, not the cached one. Keyed on
+    ``model`` (a value of ``MODEL_PRESETS``) for the same reason: switching the
+    preset must not return the graph built with the previous models.
+
+    Each key holds its own graph and its own SQLite connection to the same
+    file, so at most four live at once (two flags × two presets). That is fine
+    for SQLite, which serialises writers; it is not a pattern to extend to a
+    free-form model field, which would open a connection per string typed.
 
     ``check_same_thread=False`` matches what ``SqliteSaver.from_conn_string``
     does internally: Streamlit serves each session from its own thread, so the
@@ -70,6 +89,8 @@ def get_agent(require_approval: bool) -> Any:
     return build_agent(
         provider=get_provider(),
         require_approval=require_approval,
+        model=model,
+        subagent_model=model,
         checkpointer=SqliteSaver(connection),
     )
 

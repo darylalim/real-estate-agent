@@ -2090,6 +2090,92 @@ def test_the_approval_toggle_renders_before_anything_that_can_rerun() -> None:
     )
 
 
+def test_a_model_preset_reaches_the_graph_the_key_check_and_the_trace(monkeypatch, tmp_path) -> None:
+    """One choice in the sidebar, three readers, and each would fail quietly alone.
+
+    `get_agent` is `st.cache_resource`: if the preset were not part of its key,
+    switching it would hand back the graph built with the old models. If it
+    reached the graph but not `run_config`, every trace would report the `.env`
+    models for a conversation that never used them. And if it skipped
+    `require_api_key`, a preset on a provider whose key is missing would pass
+    the check and 401 at the first delegation.
+    """
+    from real_estate_agent import config
+    from ui import agent_session
+
+    built: list[dict[str, Any]] = []
+
+    def fake_build_agent(**kwargs: Any) -> object:
+        built.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(agent_session, "build_agent", fake_build_agent)
+    monkeypatch.setattr(agent_session, "CHECKPOINT_DB", tmp_path / "checkpoints.db")
+    agent_session.get_agent.clear()
+    try:
+        opus = "anthropic:claude-opus-5-5"
+        configured = agent_session.get_agent(False, None)
+        pinned = agent_session.get_agent(False, opus)
+        assert pinned is not configured, "the cache must be keyed on the preset"
+        assert agent_session.get_agent(False, opus) is pinned
+        assert built[0]["model"] is None and built[0]["subagent_model"] is None
+        assert built[1]["model"] == opus and built[1]["subagent_model"] == opus
+    finally:
+        agent_session.get_agent.clear()
+
+    metadata = config.run_config("t", entry_point="web", require_approval=False, model=opus)["metadata"]
+    assert metadata["model"] == opus and metadata["subagent_model"] == opus
+    for role in config.SUBAGENT_ROLES:
+        assert metadata[f"model_{role.replace('-', '_')}"] == opus
+    assert config.run_config("t", entry_point="web", require_approval=False)["metadata"] == {
+        **metadata, **config.model_metadata()
+    }, "no preset must still report the configured build"
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        config.require_api_key(model="openai:gpt-5")
+
+    # A fixed list rather than free text, so a typo cannot reach the first turn.
+    for label, spec in agent_session.MODEL_PRESETS.items():
+        assert spec is None or config.provider_of(spec) in config._PROVIDER_KEYS, (
+            f"preset {label!r} must carry a provider prefix require_api_key knows: {spec!r}"
+        )
+    assert next(iter(agent_session.MODEL_PRESETS.values())) is None, (
+        "the first (default) preset must be the configured build, so .env is honoured"
+    )
+
+
+def test_the_model_picker_renders_before_any_rerun_and_feeds_every_reader() -> None:
+    """The picker obeys the approval toggle's rule, and its value reaches all three calls.
+
+    Same Streamlit rule as the toggle above: rendered after an `st.rerun()`,
+    "New conversation" would silently reset the preset. `persist_state="session"`
+    also keeps it across a visit to the Market page, which would otherwise drop
+    it. And `get_agent`, `run_config` and `require_api_key` must be handed the
+    *same* expression: three spellings of it are how two of them drift.
+    """
+    tree = _page_tree("chat.py")
+    pickers = [call for call in _st_calls(tree, "selectbox") if _keyword(call, "key") == "model_preset"]
+    assert len(pickers) == 1, f"expected one model picker, found {len(pickers)}"
+    assert _keyword(pickers[0], "persist_state") == "session"
+    assert pickers[0].lineno < min(call.lineno for call in _st_calls(tree, "rerun"))
+
+    def model_argument(name: str) -> str:
+        (call,) = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
+        ]
+        for keyword in call.keywords:
+            if keyword.arg == "model":
+                return ast.unparse(keyword.value)
+        raise AssertionError(f"{name}(...) in chat.py is not passed model=")
+
+    passed = {name: model_argument(name) for name in ("get_agent", "run_config", "require_api_key")}
+    assert len(set(passed.values())) == 1, f"the three readers get different models: {passed}"
+
+
 def test_the_decision_control_gets_a_fresh_key_for_each_approval_round() -> None:
     """The fail-closed default has to survive a second interrupt.
 

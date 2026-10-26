@@ -21,13 +21,9 @@ from pathlib import Path
 import streamlit as st
 from langgraph.types import Command
 
-from real_estate_agent.config import (
-    DEFAULT_MODEL,
-    ROLE_MODELS,
-    require_api_key,
-    run_config,
-)
+from real_estate_agent.config import models_for, require_api_key, run_config
 from ui.agent_session import (
+    MODEL_PRESETS,
     get_agent,
     message_key,
     read_workspace_file,
@@ -150,13 +146,6 @@ st.caption(
     "specialists, and synthesises what comes back."
 )
 
-# Fail fast with an actionable message rather than a 401 part-way through a run.
-try:
-    require_api_key()
-except RuntimeError as exc:
-    st.error(str(exc), icon=":material/key_off:")
-    st.stop()
-
 st.session_state.setdefault("thread_id", str(uuid.uuid4()))
 st.session_state.setdefault("require_approval", False)
 st.session_state.setdefault("last_suggestion", None)
@@ -182,6 +171,21 @@ with st.sidebar:
             "Rebuilds the agent — the interrupt is part of the middleware stack."
         ),
     )
+    # Above every `st.rerun()` for the toggle's reason. `persist_state` also
+    # keeps the choice across a visit to the Market page, which would drop it.
+    preset = st.selectbox(
+        "Models",
+        list(MODEL_PRESETS),
+        key="model_preset",
+        persist_state="session",
+        help=(
+            "**As configured** uses `.env`, or the shipped mix when it names no "
+            "models. Rebuilds the agent. A thread can switch presets: the new "
+            "model sees the earlier replies, but not the reasoning another model "
+            "wrote behind them, which the API does not pass between models."
+        ),
+    )
+    preset_model = MODEL_PRESETS[preset]
 
     st.caption("Thread id — pass this to `main.py --thread` to continue in the CLI.")
     st.code(st.session_state.thread_id, language=None, wrap_lines=True)
@@ -210,20 +214,33 @@ with st.sidebar:
     # lets a fragment render into it and redraw in place on its own reruns.
     _workspace_browser()
 
-    st.caption(f"Orchestrator · `{DEFAULT_MODEL}`")
-    specialist_models = set(ROLE_MODELS.values())
+    # What this conversation actually runs on: the preset's resolution, not the
+    # configured constants, which the preset may have overridden.
+    orchestrator_model, role_models = models_for(preset_model)
+    st.caption(f"Orchestrator · `{orchestrator_model}`")
+    specialist_models = set(role_models.values())
     if len(specialist_models) > 1:
         # Mixed: name every role, or the caption hides which one is the odd one out.
-        for role, spec in ROLE_MODELS.items():
+        for role, spec in role_models.items():
             st.caption(f"{role} · `{spec}`")
-    elif specialist_models != {DEFAULT_MODEL}:
+    elif specialist_models != {orchestrator_model}:
         st.caption(f"Specialists · `{specialist_models.pop()}`")
 
-agent = get_agent(st.session_state.require_approval)
+# Fail fast with an actionable message rather than a 401 part-way through a run.
+# Below the sidebar rather than above it: the check depends on the preset, and a
+# missing key should leave the picker on screen so another preset can be chosen.
+try:
+    require_api_key(model=preset_model)
+except RuntimeError as exc:
+    st.error(str(exc), icon=":material/key_off:")
+    st.stop()
+
+agent = get_agent(st.session_state.require_approval, model=preset_model)
 config = run_config(
     st.session_state.thread_id,
     entry_point="web",
     require_approval=st.session_state.require_approval,
+    model=preset_model,
 )
 
 # One checkpoint read for both, not one each -- `get_state` deserialises the

@@ -156,6 +156,7 @@ def run_config(
     *,
     entry_point: Literal["cli", "web", "eval"],
     require_approval: bool,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """The LangGraph run config every entry point passes to ``agent.stream``.
 
@@ -170,9 +171,9 @@ def run_config(
     One function so the CLI and the web page cannot drift into tagging the same
     conversation two different ways. ``eval`` is the experiment runner in
     ``evals/``, tagged so a scored run is never mistaken for real traffic. The
-    models reported are this module's constants, which is what every entry
-    point builds with; a library caller
-    passing ``model=`` to ``build_agent`` should build its own config.
+    models reported are the configured ones unless ``model`` names the one the
+    build put every role on -- the chat page's preset -- so pass it whenever
+    ``build_agent`` was given one, or the trace describes a build that never ran.
     """
     try:
         app_version = version("real-estate-agent")
@@ -183,14 +184,26 @@ def run_config(
         "tags": [entry_point],
         "metadata": {
             "entry_point": entry_point,
-            **model_metadata(),
+            **model_metadata(model),
             "require_approval": require_approval,
             "app_version": app_version,
         },
     }
 
 
-def model_metadata() -> dict[str, str | None]:
+def models_for(model: str | None = None) -> tuple[str, dict[str, str]]:
+    """The orchestrator's model and each specialist's, for one build.
+
+    ``model`` puts every role on it, as ``build_agent(model=m, subagent_model=m)``
+    does; ``None`` is the configured build. One resolver, so that the key check,
+    the trace metadata and the graph cannot disagree about a conversation's models.
+    """
+    if model:
+        return model, dict.fromkeys(SUBAGENT_ROLES, model)
+    return DEFAULT_MODEL, dict(ROLE_MODELS)
+
+
+def model_metadata(model: str | None = None) -> dict[str, str | None]:
     """The models and efforts a run was built with, as flat metadata keys.
 
     Flat rather than one nested mapping because LangSmith filters on top-level
@@ -198,10 +211,11 @@ def model_metadata() -> dict[str, str | None]:
     opened to answer. Shared with ``evals.run_experiments`` so a trace and an
     experiment describe the same build the same way.
     """
+    orchestrator, role_models = models_for(model)
     return {
-        "model": DEFAULT_MODEL,
-        "subagent_model": SUBAGENT_MODEL,
-        **{f"model_{role.replace('-', '_')}": spec for role, spec in ROLE_MODELS.items()},
+        "model": orchestrator,
+        "subagent_model": model or SUBAGENT_MODEL,
+        **{f"model_{role.replace('-', '_')}": spec for role, spec in role_models.items()},
         # None, not omitted, when unset: "sent no effort" is a setting too.
         "effort": DEFAULT_EFFORT,
         "subagent_effort": SUBAGENT_EFFORT,
@@ -230,16 +244,18 @@ def provider_of(spec: str) -> str:
     return spec.split(":", 1)[0] if ":" in spec else "anthropic"
 
 
-def require_api_key() -> None:
+def require_api_key(model: str | None = None) -> None:
     """Fail fast with an actionable message instead of a 401 mid-run.
 
     Derived from each configured model's provider prefix, so overriding
     ``REA_MODEL`` to a non-Anthropic provider does not demand an Anthropic key.
     Every resolved role is checked, not just the shared fallback: one specialist
     on another provider would otherwise pass this and 401 when first delegated to.
+    ``model`` checks the build that puts every role on it instead -- see ``models_for``.
     """
+    orchestrator, role_models = models_for(model)
     needed: set[str] = set()
-    for spec in (DEFAULT_MODEL, *ROLE_MODELS.values()):
+    for spec in (orchestrator, *role_models.values()):
         variable = _PROVIDER_KEYS.get(provider_of(spec))
         if variable and not os.getenv(variable):
             needed.add(variable)

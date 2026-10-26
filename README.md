@@ -44,7 +44,9 @@ Two pages over the same project:
   browser state, so a thread id printed by the CLI can be pasted in and resumed
   here, and vice versa. The approval gate is a sidebar toggle and fails closed
   like the CLI's: a thread paused mid-`save_draft` refuses a new turn until the
-  toggle is back on.
+  toggle is back on. A **Models** selectbox beside it picks between the
+  configured build (`.env`, or the shipped Sonnet/Opus mix) and all-Opus 5.5 —
+  the two configurations the model comparison found worth running.
 - **Market** — supply, pricing and absorption over the listings provider. No
   model runs, no API key. Its headline numbers come from the agent's own
   `market_statistics` tool rather than a second implementation, so the dashboard
@@ -223,7 +225,8 @@ offline. Prefer the `LANGSMITH_*` names; don't assume the old ones are inert.
 **What a trace carries.** Both entry points build their run config through
 `run_config()` in `config.py`, so every trace is tagged `cli` or `web` and its
 root run's metadata records `entry_point`, `model`, `subagent_model`,
-`require_approval` and `app_version`. Tags and metadata are inherited by every
+`require_approval` and `app_version` — the models the conversation actually
+ran on, including a preset chosen in the chat sidebar. Tags and metadata are inherited by every
 nested subagent, model and tool run, so a metadata filter on
 `require_approval` finds every `save_draft` that ran with no gate in the stack.
 `thread_id` is not restated: LangGraph already copies it from `configurable`
@@ -243,7 +246,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 124 tests, ~1.5s
+uv run pytest tests/ -q       # 126 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```
