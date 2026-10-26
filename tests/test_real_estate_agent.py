@@ -1125,6 +1125,27 @@ def test_the_orchestrator_states_the_price_verdict_in_words() -> None:
     assert "above, within, or below the value the comparable sales support" in prompt
 
 
+def test_a_bedroom_count_is_a_minimum_in_both_prompts() -> None:
+    """Prompt text is behaviour, so the rule is pinned by its words.
+
+    Measured in follow-up F1, 4 of 4 live runs of "Find 3-bed homes in Hilo
+    under $600k": `search_listings` always got `min_beds: 3`, but the
+    orchestrator's brief said "treat as exactly 3", so every answer opened "no
+    3-bedroom homes" and filed the six correct results as 4-5-bed near-misses.
+    The graders scored all of them 1.0 — they check ids, not framing. The rule
+    sits on the orchestrator, which wrote the narrowing, with the specialist
+    as a backstop.
+    """
+    from real_estate_agent.agent import ORCHESTRATOR_PROMPT
+    from real_estate_agent.subagents import build_subagents
+
+    orchestrator = " ".join(ORCHESTRATOR_PROMPT.split())
+    assert '"3-bed homes" means three or more' in orchestrator
+    subagents = build_subagents(listing_tools=[], market_tools=[], document_tools=[], comms_tools=[])
+    search = next(sub for sub in subagents if sub["name"] == "property-search")
+    assert "A bedroom or bathroom count is a minimum" in search["system_prompt"]
+
+
 def test_agent_exposes_planning_and_delegation(monkeypatch) -> None:
     """`write_todos` is not automatic (0.7.1, re-verified 0.7.8, 0.7.21, 0.7.32) — the prompt needs it."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-construction-only")
