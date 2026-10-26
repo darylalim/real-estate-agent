@@ -360,6 +360,20 @@ and every grader against hand-built runs. Live coverage is thin: a four-example
 smoke run, which is what exposed the CMA and documents graders scoring correct
 behaviour as wrong.
 
+That versioning has a consequence for a **new rubric line**: it cannot be
+checked by re-grading old experiments in LangSmith. `evaluate_existing` (langsmith
+0.14.12) loads each example `as_of` the experiment's recorded `dataset_version`,
+so the stored runs are graded against the reference from before the line existed
+and score "not applicable". To validate a line against answers you already have,
+fetch the stored root runs read-only (`Client.list_runs(project_name=...,
+is_root=True)`; their `outputs` are what `evals/target.py` returned) and call
+`make_rubric(make_judge())` on each with the *local* example from
+`evals/datasets/`, with `LANGSMITH_TRACING=false` so the judge calls leave no
+traces. It costs only the judge. This is how the `must_present_minimums_as_met`
+line was checked: it scored the three stored answers that called larger homes
+non-matches 0, and the three after the fix 1, including the two that said,
+truthfully, that none had exactly 3 bedrooms.
+
 The grader moved from Haiku 4.5 at `temperature=0` to Haiku 5.5, which rejects
 any non-default sampling parameter, so grading is no longer pinned to a
 temperature. Rubric scores from before that change and after it are not
