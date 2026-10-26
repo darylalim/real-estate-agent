@@ -2019,8 +2019,8 @@ def test_the_eval_rubric_is_all_or_nothing_and_refuses_a_short_verdict_list() ->
     empty = _eval_example("scenarios", "search-honolulu-under-300k-empty")
     calls_before = len(seen)
     assert make_rubric(judge_returning(True, True))(empty["inputs"], run, empty["outputs"])["score"] == 1
-    hilo = _eval_example("scenarios", "search-hilo-3bed-under-600k")
-    assert make_rubric(judge_returning())(hilo["inputs"], run, hilo["outputs"])["score"] is None
+    condo = _eval_example("scenarios", "search-honolulu-condo-under-700k")
+    assert make_rubric(judge_returning())(condo["inputs"], run, condo["outputs"])["score"] is None
     assert len(seen) == calls_before + 1
 
 
@@ -2044,6 +2044,22 @@ def test_every_eval_flag_has_a_grader() -> None:
     assert flags, "the scenarios dataset carries no flags, so this checks nothing"
     # `draft_required` is read by `draft_saved`; every other flag is a rubric line.
     assert flags - {"draft_required"} <= set(_FLAG_REQUIREMENTS)
+
+
+def test_the_minimum_framing_scenario_has_no_exact_match() -> None:
+    """`must_present_minimums_as_met` is only a check while no match has exactly 3 beds.
+
+    F1's wrong answer ("none has exactly 3; here are some alternatives") is only
+    possible when every match exceeds the minimum. A mock reshuffle that adds a
+    3-bed match makes the wrong framing unreachable, and the rubric line then
+    passes on every run whether or not the bug is back.
+    """
+    example = _eval_example("scenarios", "search-hilo-3bed-under-600k")["outputs"]
+    assert example["must_present_minimums_as_met"]
+    minimum = example["filters"]["min_beds"]
+    listings = [MockListingsProvider().get(i) for i in example["expected_listing_ids"]]
+    assert listings
+    assert all(listing is not None and listing.beds > minimum for listing in listings)
 
 
 def test_the_eval_entry_points_set_their_environment_before_importing_the_package() -> None:

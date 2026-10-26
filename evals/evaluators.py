@@ -339,6 +339,14 @@ _FLAG_REQUIREMENTS = {
         "MUST: For any listing it does show, say which criterion was relaxed to find "
         "it, and present it as outside the original criteria rather than as a match."
     ),
+    # The judge reads the raw request, so the line says what a count in it means:
+    # read as exact, "3-bed" would make the judge repeat F1's mistake.
+    "must_present_minimums_as_met": (
+        "MUST NOT: Say that no listing matches, or present a listing as a near-miss, "
+        "an alternative or outside the request, when it meets every stated criterion. "
+        "A count in the request (beds, baths) is a minimum, so a listing with more "
+        "meets it."
+    ),
     "must_say_list_above_value": (
         "MUST: Say the list price is above the value the comparable sales support."
     ),
