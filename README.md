@@ -112,6 +112,13 @@ def default_provider() -> ListingsProvider:
 
 Library callers can still pass one directly with `build_agent(provider=...)`.
 
+Two optional methods are worth adding. `comparables_with_diagnostics`
+(`DiagnosticListingsProvider`) tells the analyst what comp screening threw away.
+`markets()` (`MarketsListingsProvider`) lets the dashboard list every city
+without fetching listings; without it the filters come from a scan capped at 500
+records. To check a new provider, add it to `PROVIDERS` in the tests: the
+contract section then holds it to every rule in `providers/base.py`.
+
 The mock models two deliberately different Hawaii markets (Honolulu 96815/96816
 at $566k–$1.69M active, median $1.04M and $761/sqft; Hilo 96720 at $257k–$642k,
 median $521k and $312/sqft) so budget-feasibility logic has something real to
@@ -249,7 +256,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 131 tests, ~1.5s
+uv run pytest tests/ -q       # 134 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```

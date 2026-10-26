@@ -406,6 +406,12 @@ class MockListingsProvider:
     def get(self, listing_id: str) -> Listing | None:
         return self._by_id.get(listing_id)
 
+    def markets(self) -> list[tuple[str, str, list[str]]]:
+        types: dict[tuple[str, str], set[str]] = {}
+        for listing in self._listings:
+            types.setdefault((listing.city, listing.state), set()).add(listing.property_type)
+        return [(city, state, sorted(found)) for (city, state), found in sorted(types.items())]
+
     def comparables(
         self,
         listing_id: str,

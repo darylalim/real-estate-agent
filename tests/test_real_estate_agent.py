@@ -9,6 +9,7 @@ loudly at construction.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import email
 import email.policy
 import json
@@ -389,6 +390,18 @@ def test_listings_survive_a_json_round_trip(any_provider: ListingsProvider) -> N
     for listing in _everything(any_provider):
         payload = listing.as_dict()
         assert json.loads(json.dumps(payload)) == payload
+
+
+def test_markets_agree_with_a_full_scan(any_provider: ListingsProvider) -> None:
+    """`markets()` replaces the dashboard's scan, so it must say what the scan says."""
+    markets = getattr(any_provider, "markets", None)
+    if markets is None:
+        pytest.skip("provider does not implement MarketsListingsProvider")
+    scanned: dict[tuple[str, str], set[str]] = {}
+    for x in _everything(any_provider):
+        scanned.setdefault((x.city, x.state), set()).add(x.property_type)
+    reported = {(city, state): set(types) for city, state, types in markets()}
+    assert reported == scanned
 
 
 # --- market tools ---------------------------------------------------------
@@ -2919,6 +2932,96 @@ def test_the_market_page_names_its_filters_above_the_numbers() -> None:
     at.selectbox(key="market_city").set_value(cities[1]).run()
     moved, _, _ = summary_and_first_metric(at)
     assert moved != summary and moved.startswith(f"{cities[1]},")
+
+
+class _ScanOnlyProvider:
+    """A provider without `markets()`, holding more records than the dashboard fetches."""
+
+    def __init__(self, base: MockListingsProvider, copies: int) -> None:
+        self._base = base
+        self._copies = copies
+
+    def search(self, *, limit: int = 25, **filters: Any) -> list[Listing]:
+        found = list(self._base.search(limit=10_000, **filters))
+        padded = [
+            dataclasses.replace(found[i % len(found)], listing_id=f"PAD-{i}")
+            for i in range(self._copies)
+        ] if found else []
+        return padded[:limit]
+
+    def get(self, listing_id: str) -> Listing | None:
+        return self._base.get(listing_id)
+
+    def comparables(self, listing_id: str, **kwargs: Any) -> list[Listing]:
+        return list(self._base.comparables(listing_id, **kwargs))
+
+
+@pytest.fixture
+def market_data_on(monkeypatch: pytest.MonkeyPatch):
+    """Point `ui.market_data` at a given provider, with its caches cleared both ways."""
+    from ui import market_data
+
+    def use(provider: Any) -> Any:
+        monkeypatch.setattr(market_data, "get_provider", lambda: provider)
+        st_cache_clear()
+        return market_data
+
+    def st_cache_clear() -> None:
+        for name in ("dataset_choices", "listings_frame", "market_snapshot", "_market_tools"):
+            getattr(market_data, name).clear()
+
+    yield use
+    st_cache_clear()
+
+
+def test_dataset_choices_ask_markets_before_scanning(market_data_on: Any) -> None:
+    """Past `SEARCH_LIMIT` records, the scan drops cities with no sign; `markets()` cannot.
+
+    Both providers below return a capped, one-market page from `search`, the way
+    a large feed would. The one that also has `markets()` must still yield every
+    city; the one without shows the truncation the fallback is left with. The
+    mock alone cannot tell the two paths apart -- ~100 records never reach the cap.
+    """
+    mock = MockListingsProvider()
+    every_city = sorted({city for city, _state, _types in mock.markets()})
+    assert len(every_city) > 1
+    first = every_city[0]
+
+    class _Truncated(_ScanOnlyProvider):
+        def search(self, *, limit: int = 25, **filters: Any) -> list[Listing]:
+            return super().search(limit=limit, **{"city": first, **filters})
+
+    class _TruncatedWithMarkets(_Truncated):
+        def markets(self) -> list[tuple[str, str, list[str]]]:
+            return mock.markets()
+
+    from ui.market_data import SEARCH_LIMIT
+
+    market_data = market_data_on(_TruncatedWithMarkets(mock, SEARCH_LIMIT + 50))
+    cities, _types, states = market_data.dataset_choices()
+    assert cities == every_city and set(states) == set(every_city)
+
+    market_data = market_data_on(_Truncated(mock, SEARCH_LIMIT + 50))
+    scanned, _types, _states = market_data.dataset_choices()
+    assert scanned == [first], "the fallback scan is expected to truncate past the cap"
+
+
+def test_the_market_page_says_when_its_view_is_capped(market_data_on: Any) -> None:
+    """At exactly `SEARCH_LIMIT` rows the frame may be truncated, and the page says so."""
+    from streamlit.testing.v1 import AppTest
+
+    def capped_caption(at: AppTest) -> bool:
+        return any("Showing the first" in caption.value for caption in at.caption)
+
+    market_data = market_data_on(MockListingsProvider())
+    at = AppTest.from_file(str(PROJECT_ROOT / "app_pages" / "market.py"), default_timeout=30).run()
+    assert not at.exception, at.exception
+    assert not capped_caption(at), "the ~100-record mock is nowhere near the cap"
+
+    market_data_on(_ScanOnlyProvider(MockListingsProvider(), market_data.SEARCH_LIMIT))
+    at = AppTest.from_file(str(PROJECT_ROOT / "app_pages" / "market.py"), default_timeout=30).run()
+    assert not at.exception, at.exception
+    assert capped_caption(at)
 
 
 # --- toolchain configuration ----------------------------------------------

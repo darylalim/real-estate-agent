@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 131 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 134 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -340,7 +340,12 @@ ListingsProvider (Protocol)  →  make_*_tools(provider)  →  build_subagents(.
 
 - `providers/base.py` defines `Listing` and the `ListingsProvider` **Protocol** (structural — a real MLS adapter
   subclasses nothing). `DiagnosticListingsProvider` is an *optional* extension; `find_comparables`
-  feature-detects it with `getattr(provider, "comparables_with_diagnostics", None)`.
+  feature-detects it with `getattr(provider, "comparables_with_diagnostics", None)`. `MarketsListingsProvider`
+  is the second, detected the same way by `ui.market_data.dataset_choices`: without `markets()` the dashboard's
+  filters come from one `search` capped at `SEARCH_LIMIT`, and past that cities drop out of the City selectbox
+  with no sign. The mock's ~100 records never reach the cap, so a test on the mock alone cannot tell the two
+  paths apart — measured, the first version of that test stayed green with detection switched off. The market
+  page also captions a frame of exactly `SEARCH_LIMIT` rows as possibly truncated.
 - Tools are **factories closing over the provider**, not module-level `@tool` functions. That closure is the
   only reason the data source is injectable.
 - Taking the agent live means implementing `search` / `get` / `comparables` and returning it from
