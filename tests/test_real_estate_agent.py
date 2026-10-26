@@ -779,6 +779,53 @@ def test_cli_builds_with_a_durable_checkpointer() -> None:
     assert "checkpointer=checkpointer" in source
 
 
+def _calls_to(tree: ast.AST, name: str) -> list[ast.Call]:
+    """Every call in `tree` whose callee is the bare name `name`."""
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == name
+    ]
+
+
+def test_the_cli_takes_its_provider_from_default_provider() -> None:
+    """Both entry points must ask `default_provider()`, or a swap reaches one.
+
+    `build_agent` falls back to the mock when no `provider=` is passed, which is
+    right for tests and silent for the CLI: point `default_provider` at a real
+    feed and `main.py` would carry on against the mock with no error. Read from
+    the tree rather than the text, so a comment naming the keyword cannot pass.
+    """
+    tree = ast.parse((PROJECT_ROOT / "main.py").read_text("utf-8"))
+    (call,) = _calls_to(tree, "build_agent")
+    provider = next((kw.value for kw in call.keywords if kw.arg == "provider"), None)
+    assert isinstance(provider, ast.Call), "main.py's build_agent() passes no provider="
+    assert isinstance(provider.func, ast.Name) and provider.func.id == "default_provider"
+
+
+def test_the_streamlit_provider_is_default_provider() -> None:
+    """`ui/provider.py` must not build its own mock: that was the second decision.
+
+    Two places choosing the provider is how the CLI and the browser end up on
+    different data. The cached `get_provider` returns `default_provider()` and
+    names no concrete provider at all.
+    """
+    tree = ast.parse((PROJECT_ROOT / "ui" / "provider.py").read_text("utf-8"))
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    imported = {
+        alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "MockListingsProvider" not in names | imported
+    (getter,) = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "get_provider"
+    ]
+    assert _calls_to(getter, "default_provider")
+
+
 # Both fail-closed gates -- the CLI's and the chat page's -- are asserted on the
 # syntax tree rather than the source text, because reaching either real branch
 # needs a graph paused mid-tool-call, which needs a model call. A tree is the

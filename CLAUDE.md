@@ -32,7 +32,7 @@ uv run --no-sync streamlit docs st.metric        # exact signature + docstring o
 scripts/check.sh                                 # the whole definition of done
 scripts/check.sh --floor                         # the above, plus the 3.11 leg
 
-uv run pytest tests/ -q                          # full suite: 126 tests, ~1.5s, no API calls
+uv run pytest tests/ -q                          # full suite: 128 tests, ~1.5s, no API calls
 uv run pytest tests/test_real_estate_agent.py::test_permission_matrix -q   # one test
 uv run pytest -q -k "traversal"                  # by keyword
 uv run --python 3.11 --isolated pytest tests/ -q  # the requires-python floor
@@ -343,8 +343,12 @@ ListingsProvider (Protocol)  →  make_*_tools(provider)  →  build_subagents(.
   feature-detects it with `getattr(provider, "comparables_with_diagnostics", None)`.
 - Tools are **factories closing over the provider**, not module-level `@tool` functions. That closure is the
   only reason the data source is injectable.
-- Taking the agent live means implementing `search` / `get` / `comparables` and passing
-  `build_agent(provider=...)`. No tool, subagent, or prompt changes.
+- Taking the agent live means implementing `search` / `get` / `comparables` and returning it from
+  `providers.default_provider()`. No tool, subagent, or prompt changes. Both entry points call it — `main.py`
+  passes it to `build_agent`, `ui/provider.py` caches it — and `build_agent`'s own mock fallback serves tests
+  only. Before it existed the CLI took that fallback while Streamlit built its own mock, so a swap in either
+  place left the other on synthetic data with no error. `test_the_cli_takes_its_provider_from_default_provider`
+  and `test_the_streamlit_provider_is_default_provider` pin both halves.
 - `search_listings` (the tool) deliberately does not expose `sold_within_months`; only `market_statistics` uses
   it. A real provider must still implement it — the months-of-inventory maths is wrong without it.
 
@@ -439,7 +443,8 @@ grew — in a file three tests exist to keep honest, don't reintroduce them):
   the suite loads `app_pages/market.py` directly, against the bundled reference's advice to start from the
   entry point: that advice concerns relative page paths, which the page has none of, and the entry point
   calls `load_dotenv()` in the test process and opens the chat page on the real checkpoint store.
-- **One provider, in `ui/provider.py`, for both pages.** `get_agent` passes it explicitly rather than letting
+- **One provider, in `ui/provider.py`, for both pages** — a cached `default_provider()`, the same call the
+  CLI makes. `get_agent` passes it explicitly rather than letting
   `build_agent` fall back to its own `MockListingsProvider`. Two instances of the deterministic mock are
   indistinguishable — which is why the split survived review — but a real feed would put the analyst and the
   dashboard on different snapshots, and taking the agent live would need two edits, not the one the README

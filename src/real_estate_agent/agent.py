@@ -147,8 +147,10 @@ def build_agent(
     """Construct the orchestrator agent.
 
     Args:
-        provider: Listings data source. Defaults to the deterministic mock —
-            pass a real ``ListingsProvider`` to take the agent live.
+        provider: Listings data source. Defaults to the deterministic mock,
+            which is what tests want. The entry points pass
+            ``providers.default_provider()`` instead, so taking the agent live
+            is an edit there, not here.
         model: Orchestrator model, as a LangChain ``provider:model`` string.
         subagent_model: Model for every specialist. Explicit arguments always
             win over the environment, per-role variables included. When
