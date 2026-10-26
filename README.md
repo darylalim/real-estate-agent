@@ -2,8 +2,9 @@
 
 [![check](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml/badge.svg)](https://github.com/darylalim/real-estate-agent/actions/workflows/check.yml)
 
-Real estate agent on
-[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview).
+Multi-agent real estate assistant built on LangChain
+[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) and
+Claude. Drafts only, never sends.
 
 An orchestrator that delegates to four specialists — property search, market
 analysis, document review, and client communication — each with its own tools,
