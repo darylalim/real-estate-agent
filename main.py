@@ -192,6 +192,7 @@ def main() -> int:
         require_api_key,
         run_config,
     )
+    from real_estate_agent.providers import default_provider
 
     parser = argparse.ArgumentParser(description="Real estate agent on Deep Agents.")
     parser.add_argument("prompt", nargs="*", help="Prompt. Omit for interactive mode.")
@@ -216,7 +217,9 @@ def main() -> int:
     ensure_workspace()
     with SqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as checkpointer:
         agent = build_agent(
-            require_approval=args.require_approval, checkpointer=checkpointer
+            provider=default_provider(),
+            require_approval=args.require_approval,
+            checkpointer=checkpointer,
         )
         thread_id = args.thread or str(uuid.uuid4())
         config = run_config(

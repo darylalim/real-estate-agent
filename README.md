@@ -100,14 +100,17 @@ already given.
 runs end-to-end today, but every listing is synthetic.
 
 `ListingsProvider` (`providers/base.py`) is the only thing the tools depend on.
-Implement `search`, `get`, and `comparables` against your feed and pass it in —
-no tool, subagent, or prompt changes:
+Implement `search`, `get`, and `comparables` against your feed, then return it
+from `default_provider()` in `providers/__init__.py`. That is the one edit: the
+CLI and both Streamlit pages all get their provider from it, and no tool,
+subagent, or prompt changes:
 
 ```python
-from real_estate_agent import build_agent
-
-agent = build_agent(provider=MyMlsProvider(api_key=...))
+def default_provider() -> ListingsProvider:
+    return MyMlsProvider(api_key=...)
 ```
+
+Library callers can still pass one directly with `build_agent(provider=...)`.
 
 The mock models two deliberately different Hawaii markets (Honolulu 96815/96816
 at $566k–$1.69M active, median $1.04M and $761/sqft; Hilo 96720 at $257k–$642k,
@@ -246,7 +249,7 @@ scripts/check.sh              # runs all three with the pinned versions
 Or individually:
 
 ```bash
-uv run pytest tests/ -q       # 126 tests, ~1.5s
+uv run pytest tests/ -q       # 128 tests, ~1.5s
 uvx ty@0.0.91 check           # type check
 uvx ruff@0.17.2 check .       # lint
 ```
