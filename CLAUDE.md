@@ -640,7 +640,9 @@ being written.
   allows. That fix must sit on the model: deepagents' built-in `general-purpose` subagent runs on the
   orchestrator's model and inherits none of our middleware. `RefusalNoticeMiddleware` is on the
   orchestrator and all four specialists, *not* `general-purpose` -- a refusal there still comes back
-  empty, as it always did. Consequence for `chat_model`: every role on a `SERVER_FALLBACK_MODELS` model is
+  empty, as it always did. Left open on evidence: across every LangSmith experiment on the two eval datasets
+  (61 runs, 75 delegations, measured 2026-10-26) the orchestrator picked `general-purpose` zero times. If it
+  ever appears in a trace, disabling it beats covering it. Consequence for `chat_model`: every role on a `SERVER_FALLBACK_MODELS` model is
   now an instance, not a string, even with no effort set; `test_server_fallback_does_not_change_the_tool_list`
   holds the harness profile steady across that. Measured offline only (mock transport + payload) — **no
   live refusal has been observed**, and the plan forbids provoking one. Re-check the `from_` replay on a
