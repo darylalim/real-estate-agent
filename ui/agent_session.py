@@ -15,6 +15,7 @@ uses, so a thread started in the CLI renders correctly here and vice versa.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -114,6 +115,24 @@ def _text_of(message: BaseMessage) -> str:
     return str(accessor) if accessor is not None else str(message.content)
 
 
+_CODE = re.compile(r"(```.*?```|`[^`\n]*`)", re.DOTALL)
+
+
+def _plain_dollars(text: str) -> str:
+    """Escape ``$`` so Streamlit's markdown does not read prices as LaTeX.
+
+    ``st.markdown`` treats text between two ``$`` as a KaTeX expression, so
+    "MLS-1096 ($615k, pending), MLS-1103 ($640k)" rendered the span between the
+    prices as italic maths -- in any answer quoting two prices in one paragraph,
+    which for this agent is most of them. Code spans and fences are left alone:
+    they render verbatim, so an escape there would show its backslash.
+    """
+    parts = _CODE.split(text)
+    for index in range(0, len(parts), 2):
+        parts[index] = re.sub(r"(?<!\\)\$", r"\\$", parts[index])
+    return "".join(parts)
+
+
 def _format_args(args: dict[str, Any]) -> str:
     """One-line preview of a tool call's arguments."""
     parts = []
@@ -129,7 +148,7 @@ def render_message(message: BaseMessage) -> None:
     """Draw one message. Silent for anything with nothing to show."""
     if isinstance(message, HumanMessage):
         with st.chat_message("user"):
-            st.markdown(_text_of(message))
+            st.markdown(_plain_dollars(_text_of(message)))
         return
 
     if isinstance(message, AIMessage):
@@ -139,9 +158,9 @@ def render_message(message: BaseMessage) -> None:
             return
         with st.chat_message("assistant"):
             if text:
-                st.markdown(text)
+                st.markdown(_plain_dollars(text))
             for call in calls:
-                st.caption(f"→ **{call['name']}**  ·  {_format_args(call['args'])}")
+                st.caption(f"→ **{call['name']}**  ·  {_plain_dollars(_format_args(call['args']))}")
         return
 
     if isinstance(message, ToolMessage):
